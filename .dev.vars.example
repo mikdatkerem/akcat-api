@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local development only. Never use these HTTP settings in production.
+AUTH_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:8787
+AUTH_INSECURE_LOCAL_COOKIE=true
+AUTH_ENABLE_MOBILE_BEARER=false

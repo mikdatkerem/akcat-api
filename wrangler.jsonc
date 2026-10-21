@@ -11,6 +11,15 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
+	"vars": {
+		"AUTH_ALLOWED_ORIGINS": "",
+		"AUTH_INSECURE_LOCAL_COOKIE": "false",
+		"AUTH_ENABLE_MOBILE_BEARER": "false"
+	},
+	"ratelimits": [
+		{ "name": "AUTH_IP_RATE_LIMITER", "namespace_id": "872641001", "simple": { "limit": 20, "period": 60 } },
+		{ "name": "AUTH_ACCOUNT_RATE_LIMITER", "namespace_id": "872641002", "simple": { "limit": 5, "period": 60 } }
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",

@@ -2,11 +2,16 @@
   "name": "cloudflare-workers-openapi",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "start": "wrangler dev",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 tests/auth.test.mjs",
+    "bootstrap:admin": "node --experimental-strip-types scripts/bootstrap-admin.mjs"
   },
   "dependencies": {
     "chanfana": "^3.3.0",
