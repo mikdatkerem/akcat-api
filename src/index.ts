@@ -1,26 +1,46 @@
+
 import { fromHono } from "chanfana";
 import { Hono } from "hono";
-import { TaskCreate } from "./endpoints/taskCreate";
-import { TaskDelete } from "./endpoints/taskDelete";
-import { TaskFetch } from "./endpoints/taskFetch";
-import { TaskList } from "./endpoints/taskList";
 
-// Start a Hono app
 const app = new Hono<{ Bindings: Env }>();
 
-// Setup OpenAPI registry
-const openapi = fromHono(app, {
-	docs_url: "/",
+// OpenAPI yapılandırması
+fromHono(app, {
+  docs_url: "/",
 });
 
-// Register OpenAPI endpoints
-openapi.get("/api/tasks", TaskList);
-openapi.post("/api/tasks", TaskCreate);
-openapi.get("/api/tasks/:taskSlug", TaskFetch);
-openapi.delete("/api/tasks/:taskSlug", TaskDelete);
+// D1 veritabanı sağlık kontrolü
+app.get("/api/health", async (c) => {
+  try {
+    const result = await c.env.DB.prepare(
+      "SELECT 1 AS connected"
+    ).first<{ connected: number }>();
 
-// You may also register routes for non OpenAPI directly on Hono
-// app.get('/test', (c) => c.text('Hono!'))
+    if (result?.connected !== 1) {
+      return c.json(
+        {
+          status: "error",
+          database: "disconnected",
+        },
+        503
+      );
+    }
 
-// Export the Hono app
+    return c.json({
+      status: "ok",
+      database: "connected",
+    });
+  } catch (error) {
+    console.error("Database health check failed", error);
+
+    return c.json(
+      {
+        status: "error",
+        database: "disconnected",
+      },
+      503
+    );
+  }
+});
+
 export default app;
