@@ -165,3 +165,12 @@ dist
 .env*
 !.env.example
 .wrangler/
+
+# Local configuration
+*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+*.log
