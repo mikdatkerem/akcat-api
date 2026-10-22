@@ -8,9 +8,14 @@ Cloudflare Workers + TypeScript üzerinde Hono yönlendirmesi, Chanfana OpenAPI 
 - Migration: migrations/0001_initial_schema.sql; dokuz temel tablo tanımlıdır. Yerel ve canlı migration durumları ayrıdır.
 - Sağlık kontrolü: GET /api/health; SELECT 1 ile D1 bağlantısını okur. Şemayı/migration durumunu doğrulamaz.
 - OpenAPI arayüzü: /
-- Yeni iş endpoint’leri: /api/v1 altında geliştirilecektir.
-- Örnek Task endpoint’leri kaldırılmıştır. `/api/v1/auth/login`, `/logout`, `/me` giriş/oturum endpoint’leri hazırdır. İş endpoint’leri henüz yoktur.
+- İş endpoint’leri /api/v1 altındadır.
+- Örnek Task endpoint’leri kaldırılmıştır. `/api/v1/auth/login`, `/logout`, `/me` giriş/oturum endpoint’leri hazırdır.
 - Kimlik doğrulama, güvenlik sınırları ve ilk admin kurulumu: [docs/AUTH.md](docs/AUTH.md).
+- Müşteri listeleme/arama/sayfalama, oluşturma, detay ve düzenleme hazırdır: [docs/CUSTOMERS.md](docs/CUSTOMERS.md). Aktiflik yalnızca admin tarafından değiştirilebilir.
+- Ürün listeleme/arama/sayfalama, detay ve admin oluşturma/fiyat/aktiflik düzenlemesi hazırdır: [docs/PRODUCTS.md](docs/PRODUCTS.md). Employee yalnızca okur; oluşturma idempotent, yazmalar audit ile atomiktir.
+- Satış oluşturma, tarih/müşteri filtreli geçmiş ve detay hazırdır: [docs/SALES.md](docs/SALES.md). İki rol tüm şirket satışlarını görür/oluşturur; sunucu fiyatı, snapshot, ilk ödeme ve audit tek atomik batch’tedir.
+- Sonradan tahsilat, borçlu müşteri listesi, müşteri açık satışları ve finansal hareketler hazırdır: [docs/FINANCE.md](docs/FINANCE.md). Çalışan başka çalışanın satışına tahsilat yapabilir; koşullu SQL kalan borcu aynı yazma transaction’ında doğrular, tahsilat/audit atomiktir. Serbest düzenleme/silme veya admin yetkisi açılmaz.
+- Koşullu ödemesiz satış iptali ve düzeltme talebi oluşturma/listeleme/detay/admin onay/ret hazırdır: [docs/CORRECTIONS.md](docs/CORRECTIONS.md). İptal ve karar/audit tek atomik batch’tedir; ledger asıl borcu korur ve ayrı iptal hareketiyle kapatır. Admin sadece ödemesiz satış iptal talebini onaylayabilir. Ödeme düzeltmesi/ters kayıt/iade ve kasa raporu henüz yoktur. Migration/paket eklenmedi.
 
 ## Yerel geliştirme
 

@@ -5,7 +5,8 @@ import { csrfToken, matchesSecret, MOBILE_TOKEN, tokenHash, WEB_TOKEN } from "..
 import { allowedOrigins, cookiePolicy, requireTrustedOrigin } from "./config";
 import { AuthError, forbidden, unauthorized, unavailable } from "./errors";
 
-export const authBoundary: MiddlewareHandler<AppEnv> = async (c, next) => {
+export function apiBoundary(allowMethods: string[], extraHeaders: string[] = []): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
   c.header("Cache-Control", "no-store");
   c.header("Pragma", "no-cache");
   c.header("X-Content-Type-Options", "nosniff");
@@ -16,11 +17,13 @@ export const authBoundary: MiddlewareHandler<AppEnv> = async (c, next) => {
   return cors({
     origin: (value) => origins.includes(value) ? value : undefined,
     credentials: true,
-    allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type", "X-CSRF-Token", "Authorization"],
+    allowMethods,
+    allowHeaders: ["Content-Type", "X-CSRF-Token", "Authorization", ...extraHeaders],
     maxAge: 600,
   })(c, next);
-};
+  };
+}
+export const authBoundary = apiBoundary(["GET", "POST", "OPTIONS"]);
 
 export const loginOrigin: MiddlewareHandler<AppEnv> = async (c, next) => {
   requireTrustedOrigin(c);

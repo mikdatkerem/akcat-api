@@ -51,6 +51,7 @@ harness.all("*", (c) => {
   if (mode === "unconfigured") env.AUTH_ALLOWED_ORIGINS = "";
   if (mode === "insecure-public") url.host = "api.akcat.test";
   if (mode === "no-rate-binding") env.AUTH_IP_RATE_LIMITER = undefined as unknown as RateLimit;
+  if (["customer-db-error", "product-db-error", "sale-db-error", "finance-db-error"].includes(mode ?? "")) env.DB = { withSession() { throw new Error("isolated database failure"); } } as unknown as D1Database;
   const headers = new Headers(c.req.raw.headers);
   headers.set("CF-Connecting-IP", c.req.header("X-Test-IP") ?? crypto.randomUUID());
   const request = new Request(url, c.req.raw);

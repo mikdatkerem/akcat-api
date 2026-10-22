@@ -5,7 +5,12 @@ import { bodyLimit } from "hono/body-limit";
 import type { AppEnv } from "./types";
 import { AuthError } from "./auth/errors";
 import { Login, Logout, Me } from "./auth/endpoints";
-import { authBoundary, authenticate, loginIpLimit, loginOrigin, requireCsrf } from "./auth/middleware";
+import { apiBoundary, authBoundary, authenticate, loginIpLimit, loginOrigin, requireCsrf, requireRole } from "./auth/middleware";
+import { CustomerList, CustomerGet, CustomerCreate, CustomerPatch } from "./customers/endpoints";
+import { ProductList, ProductGet, ProductCreate, ProductPatch } from "./products/endpoints";
+import { SaleCreate, SaleList, SaleGet } from "./sales/endpoints";
+import { PaymentCreate, PaymentList, ReceivableList, CustomerLedger, CustomerReceivables } from "./finance/endpoints";
+import { SaleCancel, CorrectionCreate, CorrectionList, CorrectionGet, CorrectionApprove, CorrectionReject } from "./corrections/endpoints";
 
 const app = new Hono<AppEnv>();
 
@@ -32,6 +37,117 @@ app.use("/api/v1/auth/logout", authenticate, requireCsrf);
 openapi.post("/api/v1/auth/login", Login);
 openapi.get("/api/v1/auth/me", Me);
 openapi.post("/api/v1/auth/logout", Logout);
+
+const customerSecurity = [apiBoundary(["GET", "POST", "PATCH", "OPTIONS"], ["Idempotency-Key"]),
+  authenticate, requireRole("admin", "employee"), requireCsrf] as const;
+app.use("/api/v1/customers", ...customerSecurity);
+app.use("/api/v1/customers/*", ...customerSecurity);
+const customerBodyLimit = bodyLimit({ maxSize: 16384,
+  onError: c => c.json({ error: { code: "BODY_TOO_LARGE", message: "İstek boyutu sınırı aşıldı." } }, 413),
+});
+app.use("/api/v1/customers", customerBodyLimit);
+app.use("/api/v1/customers/*", customerBodyLimit);
+// JSON writes only; CSRF and exact-origin checks stay active for cookie clients.
+app.use("/api/v1/customers", async (c, next) => {
+  if (c.req.method === "POST" && c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+    throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  }
+  await next();
+});
+app.use("/api/v1/customers/*", async (c, next) => {
+  if (c.req.method === "PATCH" && c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+    throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  }
+  await next();
+});
+openapi.get("/api/v1/customers", CustomerList);
+openapi.post("/api/v1/customers", CustomerCreate);
+openapi.get("/api/v1/customers/:id", CustomerGet);
+openapi.patch("/api/v1/customers/:id", CustomerPatch);
+
+const productSecurity = [apiBoundary(["GET", "POST", "PATCH", "OPTIONS"], ["Idempotency-Key"]),
+  authenticate, requireRole("admin", "employee"), requireCsrf] as const;
+app.use("/api/v1/products", ...productSecurity);
+app.use("/api/v1/products/*", ...productSecurity);
+app.use("/api/v1/products", customerBodyLimit);
+app.use("/api/v1/products/*", customerBodyLimit);
+app.use("/api/v1/products", async (c, next) => {
+  if (c.req.method === "POST") {
+    await requireRole("admin")(c, async () => {});
+    if (c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+      throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+    }
+  }
+  await next();
+});
+app.use("/api/v1/products/*", async (c, next) => {
+  if (c.req.method === "PATCH") {
+    await requireRole("admin")(c, async () => {});
+    if (c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+      throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+    }
+  }
+  await next();
+});
+openapi.get("/api/v1/products", ProductList);
+openapi.post("/api/v1/products", ProductCreate);
+openapi.get("/api/v1/products/:id", ProductGet);
+openapi.patch("/api/v1/products/:id", ProductPatch);
+
+const saleSecurity = [apiBoundary(["GET", "POST", "OPTIONS"], ["Idempotency-Key"]),
+  authenticate, requireRole("admin", "employee"), requireCsrf] as const;
+app.use("/api/v1/sales", ...saleSecurity);
+app.use("/api/v1/sales/*", ...saleSecurity);
+app.use("/api/v1/sales", customerBodyLimit);
+app.use("/api/v1/sales", async (c, next) => {
+  if (c.req.method === "POST" && c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+    throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  }
+  await next();
+});
+openapi.post("/api/v1/sales", SaleCreate);
+openapi.get("/api/v1/sales", SaleList);
+openapi.get("/api/v1/sales/:id", SaleGet);
+app.use("/api/v1/sales/*", customerBodyLimit);
+app.use("/api/v1/sales/*", async (c, next) => {
+  if (c.req.method === "POST" && c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  await next();
+});
+openapi.post("/api/v1/sales/:id/cancel", SaleCancel);
+
+const correctionSecurity = [apiBoundary(["GET", "POST", "OPTIONS"], ["Idempotency-Key"]), authenticate, requireRole("admin", "employee"), requireCsrf, customerBodyLimit] as const;
+app.use("/api/v1/correction-requests", ...correctionSecurity);
+app.use("/api/v1/correction-requests/*", ...correctionSecurity);
+const correctionWrite = async (c: import("./types").AppContext, next: () => Promise<void>) => {
+  if (c.req.method === "POST") {
+    if (/\/(approve|reject)$/.test(c.req.path)) await requireRole("admin")(c, async () => {});
+    if (c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  }
+  await next();
+};
+app.use("/api/v1/correction-requests", correctionWrite);
+app.use("/api/v1/correction-requests/*", correctionWrite);
+openapi.get("/api/v1/correction-requests", CorrectionList);
+openapi.post("/api/v1/correction-requests", CorrectionCreate);
+openapi.get("/api/v1/correction-requests/:id", CorrectionGet);
+openapi.post("/api/v1/correction-requests/:id/approve", CorrectionApprove);
+openapi.post("/api/v1/correction-requests/:id/reject", CorrectionReject);
+
+const paymentSecurity = [apiBoundary(["GET", "POST", "OPTIONS"], ["Idempotency-Key"]), authenticate, requireRole("admin", "employee"), requireCsrf] as const;
+app.use("/api/v1/payments", ...paymentSecurity);
+app.use("/api/v1/payments/*", ...paymentSecurity);
+app.use("/api/v1/payments", customerBodyLimit);
+app.use("/api/v1/payments", async (c, next) => {
+  if (c.req.method === "POST" && c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  await next();
+});
+app.use("/api/v1/receivables", apiBoundary(["GET", "OPTIONS"]), authenticate, requireRole("admin", "employee"));
+openapi.post("/api/v1/payments", PaymentCreate);
+openapi.get("/api/v1/payments", PaymentList);
+openapi.get("/api/v1/receivables", ReceivableList);
+// Customer security above already covers authenticated GETs on these nested routes.
+openapi.get("/api/v1/customers/:id/receivables", CustomerReceivables);
+openapi.get("/api/v1/customers/:id/ledger", CustomerLedger);
 
 // D1 veritabanı sağlık kontrolü
 app.get("/api/health", async (c) => {
