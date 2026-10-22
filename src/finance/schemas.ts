@@ -8,16 +8,17 @@ export const paymentQuery = pagination.extend({ customer_id: optional(z.uuid()),
   from: optional(z.iso.datetime()), to: optional(z.iso.datetime()), status: z.enum(["all", "valid"]).default("all"),
 }).refine(value => !value.from || !value.to || Date.parse(value.from) < Date.parse(value.to));
 export const debtQuery = pagination.extend({ q: z.preprocess(value => value === null ? "" : value, z.string().trim().normalize("NFC").max(100).default("")) });
-export const ledgerQuery = pagination.extend({ type: z.enum(["all", "sale", "payment", "reversal", "cancellation"]).default("all"), from: optional(z.iso.datetime()), to: optional(z.iso.datetime()) })
+export const ledgerQuery = pagination.extend({ type: z.enum(["all", "sale", "payment", "reversal", "record_reversal", "external_refund", "cancellation"]).default("all"), from: optional(z.iso.datetime()), to: optional(z.iso.datetime()) })
   .refine(value => !value.from || !value.to || Date.parse(value.from) < Date.parse(value.to));
 export const summarySchema = z.object({ total_debt_kurus: money, open_sales_count: z.number().int().nonnegative(), last_payment_at: z.string().nullable() });
 export const customerSchema = z.object({ id: z.uuid(), name: z.string(), phone: z.string().nullable() });
 export const paymentSchema = z.object({ id: z.uuid(), customer_id: z.uuid(), customer_name: z.string(), sale_id: z.uuid().nullable(),
   amount_kurus: money, method: paymentMethod, created_by: z.uuid(), created_by_username: z.string(), created_at: z.string(),
+  adjustment_kind: z.enum(["record_reversal", "external_refund"]).nullable(), adjustment_id: z.string().nullable(),
   is_initial: z.boolean(), is_valid: z.boolean(), reversal_of_payment_id: z.string().nullable(), sale_remaining_kurus: money.nullable() });
 export const debtRowSchema = customerSchema.extend(summarySchema.shape);
 export const customerDebtSchema = z.object({ customer: customerSchema, summary: summarySchema, data: z.array(saleSummarySchema), pagination: pageSchema });
-export const ledgerRowSchema = z.object({ id: z.string(), type: z.enum(["sale", "payment", "reversal", "cancellation"]), sale_id: z.uuid(), amount_kurus: money,
+export const ledgerRowSchema = z.object({ id: z.string(), type: z.enum(["sale", "payment", "reversal", "record_reversal", "external_refund", "cancellation"]), sale_id: z.uuid(), amount_kurus: money,
   method: paymentMethod.nullable(), created_at: z.string(), created_by: z.uuid(), created_by_username: z.string(),
   effective: z.boolean(), balance_after_kurus: z.number().int(), sale_balance_after_kurus: z.number().int() });
 export type CreatePaymentInput = z.infer<typeof createPaymentSchema>;

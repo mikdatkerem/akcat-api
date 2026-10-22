@@ -5,11 +5,13 @@ import type { CreatePaymentInput, PaymentQuery, PageQuery } from "./schemas";
 
 export const paymentSelect = `SELECT p.id, p.customer_id, c.name AS customer_name, p.sale_id, p.amount_kurus, p.method,
   p.created_by, u.username AS created_by_username, p.created_at, p.reversal_of_payment_id,
+  f.kind AS adjustment_kind, f.id AS adjustment_id,
   CASE WHEN ${validPayment} THEN 1 ELSE 0 END AS is_valid,
   CASE WHEN p.idempotency_key = 'initial:' || s.idempotency_key THEN 1 ELSE 0 END AS is_initial,
   CASE WHEN s.status = 'completed' THEN b.remaining_kurus WHEN s.id IS NOT NULL THEN 0 ELSE NULL END AS sale_remaining_kurus
   FROM payments p JOIN customers c ON c.id = p.customer_id JOIN users u ON u.id = p.created_by
-  LEFT JOIN sales s ON s.id = p.sale_id LEFT JOIN balances b ON b.id = s.id`;
+  LEFT JOIN sales s ON s.id = p.sale_id LEFT JOIN balances b ON b.id = s.id
+  LEFT JOIN financial_adjustments f ON f.payment_id = coalesce(p.reversal_of_payment_id, p.id)`;
 export function presentPayment(row: Record<string, unknown>) {
   safeMoney(row.amount_kurus);
   if (row.sale_remaining_kurus !== null) safeMoney(row.sale_remaining_kurus);

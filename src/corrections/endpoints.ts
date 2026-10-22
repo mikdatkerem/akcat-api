@@ -5,7 +5,7 @@ import type { AppContext } from "../types";
 import { getSale } from "../sales/repository";
 import { saleParams, saleDetailSchema } from "../sales/schemas";
 import { pageSchema } from "../finance/schemas";
-import { correctionQuery, correctionSchema, createCorrectionSchema, reasonBody } from "./schemas";
+import { correctionQuery, correctionSchema, createCorrectionSchema, reasonBody, approvalBody } from "./schemas";
 import { cancelSale, createCorrection, getCorrection, listCorrections, reviewCorrection } from "./repository";
 const json = <S extends z.ZodType>(schema: S) => ({ content: { "application/json": { schema } } });
 const headers = z.object({ "idempotency-key": z.uuid() });
@@ -45,10 +45,10 @@ export class CorrectionGet extends OpenAPIRoute {
   }
 }
 export class CorrectionApprove extends OpenAPIRoute {
-  schema = { tags: ["Corrections"], summary: "Admin: yalnızca ödemesiz satış iptalini atomik onayla", request: { params: saleParams, headers, body: { required: true, ...json(reasonBody) } }, responses: { "200": single } };
+  schema = { tags: ["Corrections"], summary: "Admin: güvenli tam ters kayıt, teyitli harici iade veya satış iptali", request: { params: saleParams, headers, body: { required: true, ...json(approvalBody) } }, responses: { "200": single } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    return c.json({ data: await reviewCorrection(c.env.DB, c.get("auth").user, data.params.id, data.headers["idempotency-key"], data.body.reason, true) });
+    return c.json({ data: await reviewCorrection(c.env.DB, c.get("auth").user, data.params.id, data.headers["idempotency-key"], data.body.reason, true, data.body) });
   }
 }
 export class CorrectionReject extends OpenAPIRoute {

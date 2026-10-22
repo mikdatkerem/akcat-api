@@ -23,7 +23,7 @@ Kaynaklar: [Workers crypto desteği](https://developers.cloudflare.com/workers/r
 
 ## Web cookie, CSRF ve mobil ayrımı
 
-Üretim cookie’si `__Host-akcat_session; Path=/; HttpOnly; Secure; SameSite=Lax` biçimindedir; `Domain` tanımlanmaz. HTTPS zorunludur. React web entegrasyonu `credentials: "include"` kullanır; `login` veya `me` yanıtındaki CSRF değerini yalnızca bellekte tutup `X-CSRF-Token` başlığıyla yazma isteklerine ekler. Login sonrası cookie `/me` üzerinden doğrulanır; sayfa yenilemede yine `/me` kullanılır. localStorage/sessionStorage veya Bearer kullanılmaz. Ayrıntılar: [Web oturum entegrasyonu](../../akcat-app/README.md).
+Üretim cookie’si `__Host-akcat_session; Path=/; HttpOnly; Secure; SameSite=Lax` biçimindedir; `Domain` tanımlanmaz. HTTPS zorunludur. React web entegrasyonu `credentials: "include"` kullanır; `login` veya `me` yanıtındaki CSRF değerini yalnızca bellekte tutup `X-CSRF-Token` başlığıyla yazma isteklerine ekler. Login sonrası cookie `/me` üzerinden doğrulanır; sayfa yenilemede yine `/me` kullanılır. Kimlik/CSRF tokenları için localStorage/sessionStorage veya Bearer kullanılmaz. Satış/tahsilatın opak idempotency UUID’si bu tokenlardan ayrıdır; yalnızca sessionStorage’da kullanıcı/işlem kapsamında korunabilir. Ayrıntılar: [Web oturum entegrasyonu](../../akcat-app/README.md).
 
 CSRF değeri ham web tokenı ile ayrı bir sabit bağlam üzerinden HMAC-SHA-256 olarak türetilir ve oturuma bağlıdır. Cookie ile yazmada hem tam origin eşleşmesi hem CSRF doğrulaması zorunludur. Login öncesinde oturum olmadığından login-CSRF koruması izinli `Origin` + yalnızca JSON gövdesidir; basit HTML form istekleri kabul edilmez. CORS yalnızca yapılandırılan origin’leri ve belirli metot/başlıkları açar, wildcard yoktur.
 

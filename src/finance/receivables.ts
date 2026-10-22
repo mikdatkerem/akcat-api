@@ -25,17 +25,25 @@ export async function customerReceivables(db: D1Database, id: string, query: Pag
     pagination: pageInfo(query, Number(info.open_sales_count)) };
 }
 
-export async function listReceivables(db: D1Database, query: DebtQuery) {
-  let name = "c.name";
+export function turkishName(column: string) {
+  let name = column;
   for (const [upper, lower] of [["İ", "i"], ["I", "ı"], ["Ğ", "ğ"], ["Ü", "ü"], ["Ş", "ş"], ["Ö", "ö"], ["Ç", "ç"]]) name = `replace(${name}, '${upper}', '${lower}')`;
-  const where = query.q ? `AND instr(lower(${name}), ?) > 0` : "";
-  const params = query.q ? [query.q.toLocaleLowerCase("tr-TR")] : [];
+  return `lower(${name})`;
+}
+export function debtorsQuery(q: string, includeTotals = false) {
+  const where = q ? `AND instr(${turkishName("c.name")}, ?) > 0` : "";
+  const params = q ? [q.toLocaleLowerCase("tr-TR")] : [];
   const cte = `${balancesCte}, debtors AS (
     SELECT c.id, c.name, c.phone, sum(b.remaining_kurus) AS total_debt_kurus, count(*) AS open_sales_count,
+      ${includeTotals ? "sum(b.total_kurus) AS sales_total_kurus, sum(b.paid_kurus) AS paid_kurus," : ""}
       (SELECT max(p.created_at) FROM payments p WHERE p.customer_id = c.id AND ${validPayment}) AS last_payment_at
     FROM customers c JOIN balances b ON b.customer_id = c.id
     WHERE b.status = 'completed' AND b.remaining_kurus > 0 ${where} GROUP BY c.id
   )`;
+  return { cte, params };
+}
+export async function listReceivables(db: D1Database, query: DebtQuery) {
+  const { cte, params } = debtorsQuery(query.q);
   const session = db.withSession("first-primary");
   const results = await session.batch([
     session.prepare(`${cte} SELECT count(*) AS total FROM debtors`).bind(...params),
@@ -61,12 +69,13 @@ export async function customerLedger(db: D1Database, id: string, query: LedgerQu
       s.tracked AS effective, CASE WHEN s.tracked = 1 THEN s.total_kurus ELSE 0 END AS delta
     FROM customer_sales s JOIN users u ON u.id = s.created_by
     UNION ALL
-    SELECT 'payment:' || p.id, CASE WHEN p.reversal_of_payment_id IS NULL THEN 'payment' ELSE 'reversal' END,
+    SELECT 'payment:' || p.id, CASE WHEN p.reversal_of_payment_id IS NULL THEN 'payment' ELSE coalesce(f.kind, 'reversal') END,
       s.id, p.amount_kurus, p.method, p.created_at, p.created_by, u.username,
       CASE WHEN p.reversal_of_payment_id IS NULL THEN 1 ELSE 2 END,
-      CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END,
-      CASE WHEN s.status <> 'completed' THEN 0 WHEN p.reversal_of_payment_id IS NULL THEN -p.amount_kurus ELSE p.amount_kurus END
+      s.tracked,
+      CASE WHEN s.tracked = 0 THEN 0 WHEN p.reversal_of_payment_id IS NULL THEN -p.amount_kurus ELSE p.amount_kurus END
     FROM payments p JOIN customer_sales s ON s.id = p.sale_id JOIN users u ON u.id = p.created_by
+    LEFT JOIN financial_adjustments f ON f.reversal_payment_id = p.id
     UNION ALL
     SELECT 'cancellation:' || a.id, 'cancellation', s.id, s.total_kurus, NULL, a.created_at, a.actor_user_id, u.username,
       3, 1, -s.total_kurus FROM audit_logs a JOIN customer_sales s ON s.id = a.entity_id JOIN users u ON u.id = a.actor_user_id

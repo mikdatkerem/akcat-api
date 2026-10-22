@@ -2,16 +2,21 @@ import { AuthError, forbidden } from "../auth/errors";
 import { tokenHash } from "../security/tokens";
 import type { PublicUser } from "../types";
 import { pageInfo } from "../finance/payments";
-import type { CorrectionQuery, CreateCorrection } from "./schemas";
+import type { ApprovalBody, CorrectionQuery, CreateCorrection } from "./schemas";
+
+import { adjustablePayment, adjustmentSelect, approveFinancial, cancellableSale, presentPreview, previewSelect } from "./financial";
+import { balancesCte, safeMoney } from "../finance/sql";
 
 export const unpaidSale = `s.status = 'completed' AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.sale_id = s.id)`;
 const storedChange = "CASE WHEN json_valid(r.proposed_change) THEN r.proposed_change ELSE '{}' END";
 const requestSelect = `SELECT r.*, u.username AS requested_by_username, a.username AS reviewed_by_username,
   CASE WHEN r.target_type = 'sale' AND json_extract(${storedChange}, '$.correction_type') = 'sale_cancel'
-    AND EXISTS (SELECT 1 FROM sales s WHERE s.id = r.target_id AND ${unpaidSale}) THEN 1 ELSE 0 END AS supported
+    AND EXISTS (SELECT 1 FROM sales s WHERE s.id = r.target_id AND ${cancellableSale}) THEN 1
+    WHEN r.target_type = 'payment' AND json_extract(${storedChange}, '$.correction_type') IN ('payment_reversal', 'payment_refund')
+    AND EXISTS(SELECT 1 FROM payments p JOIN sales s ON s.id = p.sale_id WHERE p.id = r.target_id AND ${adjustablePayment}) THEN 1 ELSE 0 END AS supported
   FROM correction_requests r JOIN users u ON u.id = r.requested_by LEFT JOIN users a ON a.id = r.reviewed_by`;
 const unavailable = () => new AuthError(409, "CORRECTION_NOT_PENDING", "Talep artık beklemiyor veya güvenli biçimde uygulanamıyor.");
-export const unsupported = () => new AuthError(422, "CORRECTION_UNSUPPORTED", "Yalnızca hiç ödeme kaydı olmayan satışın iptali onaylanabilir. Diğer düzeltmeler için ters kayıt ve gerekiyorsa iade süreci gerekir.");
+export const unsupported = () => new AuthError(422, "CORRECTION_UNSUPPORTED", "Talep güvenli biçimde uygulanamıyor. Satış iptalinden önce tüm ödemeler teyitli iade veya hatalı kayıt ters kaydıyla kapatılmalıdır. Tutar/yöntem değiştirme ve kısmi düzeltme desteklenmez.");
 type Audit = { entity_id: string; metadata: string };
 function verify(audit: Audit | undefined, fingerprint: string) {
   if (!audit) return false;
@@ -48,7 +53,7 @@ export async function cancelSale(db: D1Database, actor: PublicUser, id: string, 
   if (!verify(result[2]?.results[0] as Audit | undefined, fingerprint)) throw new AuthError(409, "SALE_CANCELLATION_DENIED",
     "Satış iptal edilemedi. Hiç ödeme kaydı bulunmamalı; çalışan yalnızca kendi satışını ilk beş dakika içinde iptal edebilir. Güncel kaydı kontrol edin veya düzeltme talebi oluşturun.");
 }
-function present(row: Record<string, unknown>, history: unknown[] = []) {
+function present(row: Record<string, unknown>, history: unknown[] = [], financial_preview: unknown = null, adjustment: unknown = null, cancellation_preview: unknown = null) {
   let change: Record<string, unknown> = {};
   try { change = JSON.parse(String(row.proposed_change)) ?? {}; } catch { /* Older requests remain visible, never approvable. */ }
   const { proposed_change: _change, supported, ...rest } = row;
@@ -56,8 +61,8 @@ function present(row: Record<string, unknown>, history: unknown[] = []) {
   return { ...rest, status: String(row.status), correction_type: typeof change.correction_type === "string" ? change.correction_type : "legacy",
     requested_change: typeof change.requested_change === "string" ? change.requested_change : String(row.proposed_change ?? ""),
     can_approve: row.status === "pending" && supported === 1,
-    approval_explanation: row.status !== "pending" ? "Talep sonuçlandırıldı." : supported === 1 ? "Onay, ödemesiz satışı iptal ederek borcunu kapatır."
-      : "Bu talep onaylanamaz. Yalnızca hiç ödeme kaydı olmayan, tamamlanmış satış için iptal talebi uygulanabilir. Diğer düzeltmeler ters kayıt ve gerekiyorsa iade süreci gerektirir.", history };
+    approval_explanation: row.status !== "pending" ? "Talep sonuçlandırıldı." : supported === 1 ? (row.target_type === "payment" ? "Tam tutar ters çevrilir; aktif satışın ve müşterinin borcu aynı tutarda artar. Harici iade, yalnızca adminin fiilen gerçekleştiğine dair teyidiyle kaydedilir." : "Tüm ödemeleri finansal olarak kapatılmış satış iptal edilir; satış borcu kapanır.")
+      : "Bu talep onaylanamaz. Önce ödemeleri teyitli iade veya hatalı kayıt ters kaydıyla kapatın. Eski türü belirsiz ters kayıt, kısmi düzeltme ve doğrudan tutar/yöntem değişikliği desteklenmez.", financial_preview, adjustment, cancellation_preview, history };
 }
 export async function getCorrection(db: D1Database, actor: PublicUser, id: string) {
   const session = db.withSession("first-primary");
@@ -65,10 +70,22 @@ export async function getCorrection(db: D1Database, actor: PublicUser, id: strin
     session.prepare(`${requestSelect} WHERE r.id = ? AND (? = 'admin' OR r.requested_by = ?)`).bind(id, actor.role, actor.id),
     session.prepare(`SELECT a.action, a.actor_user_id, u.username, a.created_at, a.metadata FROM audit_logs a JOIN users u ON u.id = a.actor_user_id
       WHERE a.entity_type = 'correction_request' AND a.entity_id = ? ORDER BY a.created_at, a.id`).bind(id),
+    session.prepare(previewSelect).bind(id),
+    session.prepare(`${adjustmentSelect} WHERE f.correction_request_id = ?`).bind(id),
+    session.prepare(`${balancesCte} SELECT s.id AS sale_id, s.total_kurus AS amount_kurus, b.remaining_kurus AS before_sale_remaining_kurus,
+      0 AS after_sale_remaining_kurus, d.total AS before_customer_debt_kurus, d.total - b.remaining_kurus AS after_customer_debt_kurus
+      FROM correction_requests r JOIN sales s ON s.id = r.target_id JOIN balances b ON b.id = s.id
+      JOIN (SELECT customer_id, sum(remaining_kurus) AS total FROM balances WHERE status='completed' GROUP BY customer_id) d ON d.customer_id=s.customer_id
+      WHERE r.id=? AND r.target_type='sale' AND r.status='pending' AND s.status='completed'
+        AND json_extract(${storedChange}, '$.correction_type')='sale_cancel'`).bind(id),
   ]);
   const row = results[0]?.results[0];
   if (!row) throw new AuthError(404, "CORRECTION_NOT_FOUND", "Düzeltme talebi bulunamadı.");
-  return present(row, (results[1]?.results ?? []).map(log => ({ ...log, metadata: JSON.parse(String(log.metadata)) })));
+  const preview = presentPreview(results[2]?.results[0]);
+  if (row.target_type === "payment" && row.status === "pending" && !preview) row.supported = 0;
+  const cancellation = results[4]?.results[0] ?? null;
+  if (cancellation) for (const key of Object.keys(cancellation)) if (key.endsWith('_kurus')) safeMoney(cancellation[key]);
+  return present(row, (results[1]?.results ?? []).map(log => ({ ...log, metadata: JSON.parse(String(log.metadata)) })), preview, results[3]?.results[0] ?? null, cancellation);
 }
 export async function listCorrections(db: D1Database, actor: PublicUser, query: CorrectionQuery) {
   const where = `WHERE (? = 'admin' OR r.requested_by = ?) AND (? = 'all' OR r.status = ?)`;
@@ -101,8 +118,16 @@ export async function createCorrection(db: D1Database, actor: PublicUser, key: s
   if (!verify(audit, fingerprint) || !audit) throw new AuthError(404, "CORRECTION_TARGET_NOT_FOUND", "Düzeltilecek kayıt bulunamadı.");
   return { data: await getCorrection(db, actor, audit.entity_id), created: results[0]?.meta.changes === 1 };
 }
-export async function reviewCorrection(db: D1Database, actor: PublicUser, id: string, key: string, reason: string, approve: boolean) {
+export async function reviewCorrection(db: D1Database, actor: PublicUser, id: string, key: string, reason: string, approve: boolean, body?: ApprovalBody) {
   if (actor.role !== "admin") throw forbidden();
+  if (approve) {
+    const current = await getCorrection(db, actor, id);
+    if (["payment_reversal", "payment_refund"].includes(current.correction_type)) {
+      await approveFinancial(db, actor, id, key, body ?? { reason });
+      return getCorrection(db, actor, id);
+    }
+    if (body && Object.keys(body).some(field => field !== "reason")) throw new AuthError(400, "INVALID_CORRECTION_INPUT", "Bu talep için finansal onay alanları geçersiz.");
+  }
   const action = approve ? "approved" : "rejected", operation = operationId(actor.id, key, `correction:${action}`);
   const attempt = crypto.randomUUID(), now = new Date().toISOString(), fingerprint = tokenHash(JSON.stringify([id, reason]));
   const session = db.withSession("first-primary");
@@ -111,7 +136,7 @@ export async function reviewCorrection(db: D1Database, actor: PublicUser, id: st
       'before', r.status, 'after', ?, 'approved_by', ?, 'request_hash', ?, 'attempt', ?), ? FROM correction_requests r
     WHERE r.id = ? AND r.status = 'pending' AND (? = 0 OR (r.target_type = 'sale' AND json_valid(r.proposed_change)
       AND json_extract(${storedChange}, '$.correction_type') = 'sale_cancel'
-      AND EXISTS (SELECT 1 FROM sales s WHERE s.id = r.target_id AND ${unpaidSale})))
+      AND EXISTS (SELECT 1 FROM sales s WHERE s.id = r.target_id AND ${cancellableSale})))
       AND NOT EXISTS(SELECT 1 FROM audit_logs WHERE id = ?)`)
     .bind(operation, actor.id, `correction.${action}`, reason, action, approve ? actor.id : null, fingerprint, attempt, now, id, approve ? 1 : 0, operation)];
   if (approve) {
@@ -119,9 +144,10 @@ export async function reviewCorrection(db: D1Database, actor: PublicUser, id: st
     statements.push(session.prepare(`INSERT INTO audit_logs(id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
       SELECT ?, ?, 'sale.cancelled', 'sale', s.id, json_object('reason', ?, 'before', json_object('status', s.status, 'remaining_kurus', s.total_kurus),
         'after', json_object('status', 'cancelled', 'remaining_kurus', 0), 'amount_kurus', s.total_kurus,
-        'correction_id', r.id, 'approved_by', ?, 'request_hash', ?, 'attempt', ?), ?
+        'correction_id', r.id, 'approved_by', ?, 'request_hash', ?, 'attempt', ?),
+        max(?, s.created_at, coalesce((SELECT max(p.created_at) FROM payments p WHERE p.sale_id=s.id), s.created_at))
       FROM sales s JOIN correction_requests r ON r.target_id = s.id JOIN audit_logs a ON a.entity_id = r.id
-      WHERE a.id = ? AND json_extract(a.metadata, '$.attempt') = ? AND ${unpaidSale}`)
+      WHERE a.id = ? AND json_extract(a.metadata, '$.attempt') = ? AND ${cancellableSale}`)
       .bind(operation + ":sale", actor.id, reason, actor.id, fingerprint, attempt, now, operation, attempt));
     statements.push(cancelUpdate(session, operation + ":sale", attempt, now));
   }

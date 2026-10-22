@@ -1,3 +1,4 @@
+import { AdjustmentList } from "./finance/adjustments";
 
 import { fromHono } from "chanfana";
 import { Hono } from "hono";
@@ -11,6 +12,7 @@ import { ProductList, ProductGet, ProductCreate, ProductPatch } from "./products
 import { SaleCreate, SaleList, SaleGet } from "./sales/endpoints";
 import { PaymentCreate, PaymentList, ReceivableList, CustomerLedger, CustomerReceivables } from "./finance/endpoints";
 import { SaleCancel, CorrectionCreate, CorrectionList, CorrectionGet, CorrectionApprove, CorrectionReject } from "./corrections/endpoints";
+import { SummaryReport, SalesReport, PaymentsReport, ReceivablesReport, EmployeesReport } from "./reports/endpoints";
 
 const app = new Hono<AppEnv>();
 
@@ -145,9 +147,24 @@ app.use("/api/v1/receivables", apiBoundary(["GET", "OPTIONS"]), authenticate, re
 openapi.post("/api/v1/payments", PaymentCreate);
 openapi.get("/api/v1/payments", PaymentList);
 openapi.get("/api/v1/receivables", ReceivableList);
+app.use("/api/v1/financial-adjustments", apiBoundary(["GET", "OPTIONS"]), authenticate, requireRole("admin", "employee"));
+openapi.get("/api/v1/financial-adjustments", AdjustmentList);
 // Customer security above already covers authenticated GETs on these nested routes.
 openapi.get("/api/v1/customers/:id/receivables", CustomerReceivables);
 openapi.get("/api/v1/customers/:id/ledger", CustomerLedger);
+
+app.use("/api/v1/reports/*", apiBoundary(["GET", "OPTIONS"]), authenticate, requireRole("admin", "employee"));
+app.use("/api/v1/reports/employees", requireRole("admin"));
+app.use("/api/v1/reports/*", async (c, next) => {
+  // Actor-scoped report aggregates are management drilldowns, even on shared report paths.
+  if (c.req.query("created_by") !== undefined) await requireRole("admin")(c, async () => {});
+  await next();
+});
+openapi.get("/api/v1/reports/summary", SummaryReport);
+openapi.get("/api/v1/reports/sales", SalesReport);
+openapi.get("/api/v1/reports/payments", PaymentsReport);
+openapi.get("/api/v1/reports/receivables", ReceivablesReport);
+openapi.get("/api/v1/reports/employees", EmployeesReport);
 
 // D1 veritabanı sağlık kontrolü
 app.get("/api/health", async (c) => {

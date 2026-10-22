@@ -86,7 +86,7 @@ before(async () => {
     await delay(250);
   }
   assert.ok(ready, "isolated Worker ready within 40 seconds");
-  const schema = await readFile(join(project, "migrations/0001_initial_schema.sql"), "utf8");
+  const schema = (await Promise.all(["0001_initial_schema.sql", "0002_financial_adjustments.sql"].map(file => readFile(join(project, "migrations", file), "utf8")))).join("\n");
   const response = await request("/__test/schema", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: schema }) });
   assert.equal(response.status, 200);
 }, { timeout: 60000 });
@@ -106,11 +106,11 @@ after(async () => {
   }
 });
 
-test("health uses the isolated D1 database; nine tables are present", async () => {
+test("health uses the isolated D1 database; ten tables are present", async () => {
   const response = await request("/api/health");
   assert.deepEqual(await response.json(), { status: "ok", database: "connected" });
   const tables = await sql("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'");
-  assert.equal(tables.length, 9);
+  assert.equal(tables.length, 10);
 });
 
 test("bootstrap is atomic, one-use and remains locked after admin demotion", async () => {
@@ -336,7 +336,7 @@ test("local CLI D1 adapter works with isolated persistence and rejects an existi
     persist: { path: join(temporary, "cli-state") }, remoteBindings: false });
   try {
     const db = proxy.env.DB;
-    const schema = await readFile(join(project, "migrations/0001_initial_schema.sql"), "utf8");
+    const schema = (await Promise.all(["0001_initial_schema.sql", "0002_financial_adjustments.sql"].map(file => readFile(join(project, "migrations", file), "utf8")))).join("\n");
     await db.batch(schema.split(";").map((value) => value.trim()).filter(Boolean).map((value) => db.prepare(value)));
     const now = new Date().toISOString();
     await db.prepare("INSERT INTO users(id,username,password_hash,role,is_active,created_at,updated_at) VALUES(?,?,?,'admin',1,?,?)")
