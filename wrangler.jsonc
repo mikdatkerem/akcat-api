@@ -5,6 +5,7 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "akcat-api",
+	"workers_dev": false,
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-19",
 	"observability": {
@@ -12,7 +13,7 @@
 	},
 	"upload_source_maps": true,
 	"vars": {
-		"AUTH_ALLOWED_ORIGINS": "",
+		"AUTH_ALLOWED_ORIGINS": "https://akcat-app.akcat.workers.dev",
 		"AUTH_INSECURE_LOCAL_COOKIE": "false",
 		"AUTH_ENABLE_MOBILE_BEARER": "false"
 	},
