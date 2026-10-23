@@ -61,7 +61,7 @@ React talep/onay öncesi bakiye önizlemesi, zorunlu iade teyidi/referansı, ona
 
 ## Migration ve doğrulama
 
-`migrations/0002_financial_adjustments.sql` yalnızca ek tablo ve indeksler oluşturur; dokuz temel tabloyu/veriyi yeniden yazmaz. Kod bu tabloyu okuduğundan çalıştırılmadan önce operatörün uygun ortamda migration’ı uygulaması gerekir. Bu görevde **yalnızca OS geçici dizinindeki ayrı kimlikli izole test D1’e** uygulandı; mevcut yerel veya uzak D1’e uygulanmadı. Üretim için önce yedekleme ve mevcut migration durumunu inceleme gerekir; deploy yapılmadı.
+`migrations/0002_financial_adjustments.sql` yalnızca ek tablo ve indeksler oluşturur; dokuz temel tabloyu/veriyi yeniden yazmaz. Kod bu tabloyu okuduğundan çalıştırılmadan önce operatörün uygun ortamda migration’ı uygulaması gerekir. Modül geliştirme aşamasında yalnızca OS geçici dizinindeki ayrı kimlikli test D1'e uygulanmıştı. Sonraki [yerel hata düzeltmesinde](LOCAL_FIXES.md) mevcut yerel D1'e yedek alınarak uygulandı; uzak D1'e uygulanmadı. Üretim için önce yedekleme ve mevcut migration durumunu inceleme gerekir; deploy yapılmadı.
 
 `tests/adjustments.test.mjs` gerçek geçici Workers/D1 üzerinde yetki, önizleme/tam tutar, iki admin yarışı, idempotency, audit rollback, borç, iadeli iptal, eski reversal engeli, rapor/tarih/attribution ve geçmişi doğrular. `test:adjustments:browser` gerçek React → Vite proxy → API üzerinde employee talebi, admin teyidi, commit sonrası yanıt kaybı/aynı anahtarla tekrar, iptal ve borç, rapor ve API hata/yeniden denemeyi kapsar. Banka/POS sonucu, gerçek para iadesi ve üretim yükü bu testlerin kapsamı değildir.
 

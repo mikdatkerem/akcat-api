@@ -1,4 +1,5 @@
 import { AdjustmentList } from "./finance/adjustments";
+import { missingFinancialSchema } from "./database/errors";
 
 import { fromHono } from "chanfana";
 import { Hono } from "hono";
@@ -24,6 +25,10 @@ const openapi = fromHono(app, {
 app.onError((error, c) => {
   c.header("Cache-Control", "no-store");
   if (error instanceof AuthError) return c.json({ error: { code: error.code, message: error.message } }, error.status);
+  if (missingFinancialSchema(error)) {
+    console.error("Database schema prerequisite missing; apply pending migrations for the selected environment.");
+    return c.json({ error: { code: "DATABASE_SCHEMA_REQUIRED", message: "Veritabanı güncellemesi gerekli. Sistem yöneticinizle iletişime geçin." } }, 503);
+  }
   // Never log request bodies, cookies, tokens, SQL or raw exception objects.
   console.error("Unhandled API request error");
   return c.json({ error: { code: "INTERNAL_ERROR", message: "İstek işlenemedi." } }, 500);

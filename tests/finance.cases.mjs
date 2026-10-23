@@ -153,7 +153,9 @@ export function registerFinanceTests({ request, sql, origin, admin, employee, cu
   test('finance: existing full reversals stay visible; valid payment/debt/ledger agree without erasing history', async () => {
     const target = await newSale(10000, 5000), before = await receivables()
     const paid = (await (await pay(colleague, input(5000, 'bank', target))).json()).data
-    const now = new Date().toISOString()
+    // The fixture runs in Node, writes originate in workerd. Match the real
+    // reversal writer's causal timestamp floor instead of assuming aligned clocks.
+    const now = new Date(Math.max(Date.now(), Date.parse(paid.created_at), Date.parse(target.created_at))).toISOString()
     await sql('INSERT INTO payments(id,customer_id,sale_id,amount_kurus,method,created_by,idempotency_key,reversal_of_payment_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
       [randomUUID(), customer.id, target.id, 5000, 'bank', colleague.data.user.id, randomUUID(), paid.id, now])
     const all = await (await read('/api/v1/payments?sale_id=' + target.id)).json()
@@ -161,7 +163,9 @@ export function registerFinanceTests({ request, sql, origin, admin, employee, cu
     assert.equal(all.data.length, 3); assert.equal(valid.data.length, 1); assert.equal(valid.data[0].is_initial, true)
     assert.equal((await receivables()).summary.total_debt_kurus, before.summary.total_debt_kurus)
     const history = await (await read(`/api/v1/customers/${customer.id}/ledger?type=reversal`)).json()
-    assert.equal(history.data[0].sale_balance_after_kurus, 5000); assert.equal(history.data[0].balance_after_kurus, history.summary.total_debt_kurus)
+    assert.equal(history.data[0].sale_id, target.id)
+    assert.equal(history.data[0].sale_balance_after_kurus, 5000)
+    assert.equal(history.data[0].balance_after_kurus, history.summary.total_debt_kurus)
   })
   test('finance: aggregate amounts beyond safe integer limits fail closed instead of rounding', async () => {
     const target = (await (await customerRequest(employee(), '', 'POST', { name: 'Üst sınır ' + randomUUID(), address: 'İzole adres' })).json()).data

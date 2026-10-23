@@ -2,6 +2,8 @@
 
 Raporlar salt okunurdur. Mevcut Workers + Hono + Chanfana, D1, authentication/Origin/CORS kuralları korunur. Bütün endpoint’ler oturum, aktif kullanıcı ve rol ister; yanıtlar `no-store` taşır. Rapor modülü binding/bağımlılık veya özet/cache katmanı eklemez. Finansal düzeltme genişletmesi `0002` ek tablosunu okur; [FINANCIAL_ADJUSTMENTS.md](FINANCIAL_ADJUSTMENTS.md) geçerlidir.
 
+Yerel hata düzeltmesi: `0002` eksikliği boş veritabanında da ödeme/özet raporunu engeller; API `503 DATABASE_SCHEMA_REQUIRED` döndürür. Başarılı sıfır sonuç gerçek boş durumdur. Dashboard başlığı ve açıklaması bugün (`Europe/Istanbul`) içindeki en yeni 10 hareketin gösterildiğini, eski günlerin rapor filtresinde bulunacağını açıkça belirtir. Güncel yerel şema ve kontrol kaydı: [LOCAL_FIXES.md](LOCAL_FIXES.md).
+
 ## API sözleşmesi
 
 | `GET /api/v1/reports/…` | Kapsam / yanıt |
