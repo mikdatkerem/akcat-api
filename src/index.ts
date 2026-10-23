@@ -7,6 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { AppEnv } from "./types";
 import { AuthError } from "./auth/errors";
 import { Login, Logout, Me } from "./auth/endpoints";
+import { ChangePassword, passwordChangeLimit } from "./auth/changePassword";
 import { apiBoundary, authBoundary, authenticate, loginIpLimit, loginOrigin, requireCsrf, requireRole } from "./auth/middleware";
 import { CustomerList, CustomerGet, CustomerCreate, CustomerPatch } from "./customers/endpoints";
 import { ProductList, ProductGet, ProductCreate, ProductPatch } from "./products/endpoints";
@@ -14,6 +15,7 @@ import { SaleCreate, SaleList, SaleGet } from "./sales/endpoints";
 import { PaymentCreate, PaymentList, ReceivableList, CustomerLedger, CustomerReceivables } from "./finance/endpoints";
 import { SaleCancel, CorrectionCreate, CorrectionList, CorrectionGet, CorrectionApprove, CorrectionReject } from "./corrections/endpoints";
 import { SummaryReport, SalesReport, PaymentsReport, ReceivablesReport, EmployeesReport } from "./reports/endpoints";
+import { UserList, UserGet, UserCreate, UserPatch, UserResetPassword } from "./users/endpoints";
 
 const app = new Hono<AppEnv>();
 
@@ -41,9 +43,27 @@ app.use("/api/v1/auth/*", bodyLimit({ maxSize: 4096,
 app.use("/api/v1/auth/login", loginOrigin, loginIpLimit);
 app.use("/api/v1/auth/me", authenticate);
 app.use("/api/v1/auth/logout", authenticate, requireCsrf);
+app.use("/api/v1/auth/change-password", authenticate, requireCsrf, passwordChangeLimit);
 openapi.post("/api/v1/auth/login", Login);
 openapi.get("/api/v1/auth/me", Me);
 openapi.post("/api/v1/auth/logout", Logout);
+openapi.post("/api/v1/auth/change-password", ChangePassword);
+
+const userSecurity = [apiBoundary(["GET", "POST", "PATCH", "OPTIONS"], ["Idempotency-Key"]), authenticate, requireRole("admin"), requireCsrf,
+  bodyLimit({ maxSize: 4096, onError: c => c.json({ error: { code: "BODY_TOO_LARGE", message: "İstek boyutu sınırı aşıldı." } }, 413) })] as const;
+app.use("/api/v1/users", ...userSecurity);
+app.use("/api/v1/users/*", ...userSecurity);
+const userJson = async (c: import("./types").AppContext, next: () => Promise<void>) => {
+  if (["POST", "PATCH"].includes(c.req.method) && c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new AuthError(415, "JSON_REQUIRED", "JSON isteği gerekli.");
+  await next();
+};
+app.use("/api/v1/users", userJson);
+app.use("/api/v1/users/*", userJson);
+openapi.get("/api/v1/users", UserList);
+openapi.post("/api/v1/users", UserCreate);
+openapi.get("/api/v1/users/:id", UserGet);
+openapi.patch("/api/v1/users/:id", UserPatch);
+openapi.post("/api/v1/users/:id/reset-password", UserResetPassword);
 
 const customerSecurity = [apiBoundary(["GET", "POST", "PATCH", "OPTIONS"], ["Idempotency-Key"]),
   authenticate, requireRole("admin", "employee"), requireCsrf] as const;

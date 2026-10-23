@@ -11,6 +11,7 @@ Cloudflare Workers + TypeScript üzerinde Hono yönlendirmesi, Chanfana OpenAPI 
 - İş endpoint’leri /api/v1 altındadır.
 - Örnek Task endpoint’leri kaldırılmıştır. `/api/v1/auth/login`, `/logout`, `/me` giriş/oturum endpoint’leri hazırdır.
 - Kimlik doğrulama, güvenlik sınırları ve ilk admin kurulumu: [docs/AUTH.md](docs/AUTH.md).
+- Yalnızca admin'e açık kullanıcı listeleme/oluşturma/detay/PATCH ve parola sıfırlama: [docs/USERS.md](docs/USERS.md). Son aktif admin/self lockout koruması, atomik audit ve oturum iptali mevcut tablolarla uygulanır; migration yoktur.
 - Müşteri listeleme/arama/sayfalama, oluşturma, detay ve düzenleme hazırdır: [docs/CUSTOMERS.md](docs/CUSTOMERS.md). Aktiflik yalnızca admin tarafından değiştirilebilir.
 - Ürün listeleme/arama/sayfalama, detay ve admin oluşturma/fiyat/aktiflik düzenlemesi hazırdır: [docs/PRODUCTS.md](docs/PRODUCTS.md). Employee yalnızca okur; oluşturma idempotent, yazmalar audit ile atomiktir.
 - Satış oluşturma, tarih/müşteri filtreli geçmiş ve detay hazırdır: [docs/SALES.md](docs/SALES.md). İki rol tüm şirket satışlarını görür/oluşturur; sunucu fiyatı, snapshot, ilk ödeme ve audit tek atomik batch’tedir.
@@ -32,6 +33,8 @@ npm.cmd run dev -- --local --port 8787
 Diğer kabuklarda npm run dev -- --local --port 8787 kullanılabilir. --local uzaktaki binding’leri devre dışı bırakır. Mevcut yerel D1 durumu kullanılır; migration veya seed otomatik çalıştırılmaz. Sağlık kontrolü http://localhost:8787/api/health adresindedir. Web’in localhost:5173 üzerindeki Vite proxy’si aynı servise yönlendirir.
 
 ## Kontroller
+
+Her iki rolün hesap bilgileri ve güvenli parola değiştirme sözleşmesi: [Hesabım](docs/ACCOUNT.md). `POST /api/v1/auth/change-password` mevcut parolayı doğrular; güncelleme/audit/tüm oturum iptali atomiktir. Migration veya yeni binding gerekmez.
 
 ```powershell
 npm.cmd run typecheck

@@ -146,7 +146,7 @@ test("valid credentials create an opaque hashed session and expose only public u
   const response = await me(auth.cookie);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await response.json(), auth.data);
+  assert.deepEqual(await response.json(), { ...auth.data, is_active: true });
 });
 
 test("wrong password, missing user and inactive account have identical generic failures", async () => {

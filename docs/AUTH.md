@@ -1,18 +1,27 @@
 # AKÇAT API — Kimlik doğrulama ve ilk admin
 
-Bu altyapı bağımsız `akcat-api/` içindedir. React giriş/oturum istemcisi `akcat-app/` içindedir; mobil uygulama henüz geliştirilmedi. D1 şeması ve dokuz temel tablo korunur. Yeni migration gerekmez. Halka açık kayıt/kullanıcı oluşturma endpoint’i yoktur.
+Bu altyapı bağımsız `akcat-api/` içindedir. React giriş/oturum istemcisi `akcat-app/` içindedir; mobil uygulama henüz geliştirilmedi. D1 şeması ve dokuz temel tablo korunur. Yeni migration gerekmez. Halka açık kayıt endpoint'i yoktur; [çalışan hesabı yönetimi](USERS.md) yalnızca admin'e açık `/api/v1/users` altında uygulanır.
 
 ## Endpoint sözleşmesi
 
 | Endpoint | Gereksinim | Yanıt |
 |---|---|---|
 | `POST /api/v1/auth/login` | İzin verilen `Origin`, `Content-Type: application/json`, `{username,password}` | Web cookie’si ve `{user:{id,username,role},expiresAt,csrfToken}` |
-| `GET /api/v1/auth/me` | Geçerli oturum | Güncel kullanıcı, son kullanma ve web CSRF tokenı |
+| `GET /api/v1/auth/me` | Geçerli oturum | `{user:{id,username,role},is_active:true,expiresAt,csrfToken?}`; web oturumunda CSRF bulunur |
 | `POST /api/v1/auth/logout` | Geçerli oturum; web’de izin verilen `Origin` ve `X-CSRF-Token` | `{success:true}`; oturum iptali ve cookie silme |
+| `POST /api/v1/auth/change-password` | Geçerli oturum, JSON `{current_password,new_password}`; web’de izinli Origin/CSRF | `{success:true}`; parola, audit ve tüm oturumların iptali atomiktir; web cookie’si silinir |
 
 Yanıtlar `Cache-Control: no-store` taşır. Girişte bilinmeyen kullanıcı, yanlış parola ve pasif hesap aynı genel `401 INVALID_CREDENTIALS` yanıtını alır; hepsinde aynı KDF çalıştırılır. Geçersiz girdi `400`, oturum yok/geçersiz/süresi dolmuş/pasif hesap `401`, rol veya CSRF ihlali `403`, içerik tipi `415`, büyük gövde `413`, giriş sınırı `429`, eksik güvenlik yapılandırması `503` döndürür. Hatalarda SQL/stack/kimlik bilgisi gösterilmez. İstek gövdesi üst sınırı 4 KiB’dir. Kullanıcı adı NFKC + kırpma + Türkçe küçük harfle normalleştirilir (3–64 harf/rakam/`._-`); parola aynen korunur.
 
 ## Parola ve oturum güvenliği
+
+Admin ve employee `#/hesabim` üzerinden kendi hesaplarını `/me` ile görüntüler ve mevcut parolayı doğrulayarak parolalarını değiştirir. Hesap durumu middleware'in primary okumada aktifliği doğrulaması nedeniyle `is_active:true` olarak döner; pasif hesap 401 alır. Parola tekrarı yalnızca istemcide kontrol edilir. Yeni parola mevcut kullanıcı yönetimiyle aynı politikadadır: 15–128 karakter; dış boşluklar çıkarıldığında en az 15 karakter. Parola kırpılmadan scrypt'e verilir ve eski parolayla aynı olamaz. Başka kullanıcının parolası yalnızca admin [reset endpoint'i](USERS.md) üzerinden yönetilir.
+
+Parola değiştirme isteği kullanıcı ID'si/rolü kabul etmez; oturumdaki ID esas alınır. Yanlış mevcut parola `400 CURRENT_PASSWORD_INVALID` (oturum kapanmaz), geçersiz alan/politika `400 INVALID_PASSWORD_INPUT`, aynı parola `400 PASSWORD_UNCHANGED`, eşzamanlı hesap/oturum değişikliği `409 PASSWORD_CHANGE_CONFLICT` döner. Login'den ayrı anahtar alanıyla mevcut account rate limiter kullanılır: kullanıcı ID'sine göre 5 deneme/60 saniye, `429 PASSWORD_CHANGE_RATE_LIMITED` ve `Retry-After:60`. Cloudflare limiter mevcut yerel/bölgesel davranışını korur; küresel kesin sayaç varsayılmaz. Eksik binding/limiter hatası güvenli biçimde 503 verir. CSRF, exact Origin, JSON ve 4 KiB gövde sınırı korunur.
+
+Scrypt doğrulaması/hash hesaplamasından sonra, tek primary D1 `batch` içinde doğrulanan eski `password_hash`, güncel aktiflik ve oturumun iptal/süre durumu tekrar denetlenir. Koşullu `auth.password_changed` audit işareti parola güncellemesini ve kullanıcının **tüm** cookie/bearer oturumlarının iptalini kapılar. Bir SQL hatasında hepsi geri alınır. İki değişiklikten yalnızca biri aynı eski hash'i kullanabilir; eşzamanlı admin reset/logout/pasifleştirme eski doğrulamayla aşılamaz. Login'in hash koşullu session INSERT'i de eski parolayla yeni geçerli oturum açılmasını engeller. Audit yalnızca actor, hedef, eylem ve UTC zamanı taşır; parola/hash/hızlı parola özeti veya token içermez. [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch), [rate limiter](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
+
+Başarıda React parola alanlarını ve bellekteki oturumu temizler; giriş ekranında Türkçe mesaj gösterir. Web Storage kullanılmaz ve otomatik mutation tekrarı yoktur. Yanıt kaybolursa başarı varsayılmaz: form kilitlenir, kullanıcı `/me` ile oturumu kontrol eder; 401 sonrasında yeni parolayla giriş denenir. Geçici ağ hatası tek başına çıkış sayılmaz. Sayfa terk edilirse form verisi kaybolur; parola geri alma/kurtarma endpoint'i eklenmedi. Test ve kapsam ayrıntıları: [Hesabım](ACCOUNT.md).
 
 - Workers `node:crypto` yerleşik Argon2id sunmuyor. Harici WASM paketi/bellek yükü eklemek yerine yerleşik scrypt seçildi: `N=16384, r=8, p=5`, 16 bayt rastgele salt, 32 bayt çıktı, 32 MiB KDF bellek üst sınırı (temel çalışma belleği yaklaşık 16 MiB). Bu, OWASP’ın eşdeğer minimum alternatiflerinden biridir. Parametreler hash içinde sürümlüdür; doğrulama keyfi iş yükü parametrelerini kabul etmez. Salt yalnızca `password_hash` içinde kalır, API’ye çıkmaz. Karşılaştırma sabit uzunlukta `timingSafeEqual` kullanır.
 - Web oturumu `w1_` önekli 32 rastgele bayttır. D1 `sessions.id` ham tokenın SHA-256 hash’idir; ham token veritabanına/audit’e/yanıt gövdesine yazılmaz. Süre 8 saat, sabittir; otomatik uzatma yoktur. Logout `revoked_at` yazar, geçmiş silinmez. Her login yeni token üretir.
@@ -33,7 +42,7 @@ Gelecekteki mobil yol ayrı `m1_` tokenları ve `Authorization: Bearer` taşıma
 
 ## İlk admin — açık operatör eylemi
 
-Bu aşamada gerçek admin oluşturulmadı. Komut, kullanıcı adı ve gizli parola istemi açar; parolayı argüman, ortam değişkeni, dosya veya SQL geçmişine yazmayın. Parola en az 15, en fazla 128 karakter olmalı; benzersiz ve parola yöneticisiyle üretilmiş bir değer kullanın. Kullanıcı oluşturma yalnızca bu kurulumla ilk admin için yapılır; çalışan yönetimi ayrı geliştirmedir.
+Gerçek admin otomatik oluşturulmaz. Komut, kullanıcı adı ve gizli parola istemi açar; parolayı argüman, ortam değişkeni, dosya veya SQL geçmişine yazmayın. Parola en az 15, en fazla 128 karakter olmalı; benzersiz ve parola yöneticisiyle üretilmiş bir değer kullanın. İlk admin bu kurulumla; sonraki employee/admin hesapları yetkili admin tarafından [hesap yönetimi](USERS.md) üzerinden oluşturulur.
 
 Yerel kurulum için `akcat-api/` içinde:
 
@@ -59,7 +68,7 @@ Tek atomik batch, admin yoksa kullanıcıyı ve `audit_logs.id = system:first-ad
 2. Cloudflare hesabında rate-limit namespace kimliklerinin başka uygulamalarla çakışmadığını doğrulayın; `AUTH_IP_RATE_LIMITER` 20/60 sn, `AUTH_ACCOUNT_RATE_LIMITER` 5/60 sn bağlanmalıdır. Hesap anahtarı normalize kullanıcı adı hash’i, IP anahtarı Cloudflare’ın `CF-Connecting-IP` hash’idir. Eksik/başarısız binding `503`; aşım `429 + Retry-After: 60` verir. `X-Forwarded-For` kullanılmaz. Lokal geliştirme internete açılmamalıdır.
 3. Workers Rate Limiting konum bazlı ve yaklaşık/eventual consistency ile çalışır; kesin küresel hesap kilidi değildir. Dağıtık parola denemeleri için üretimde WAF/bot politikası ve gerekirse tutarlı küresel sayaç (ör. Durable Object) değerlendirilmelidir. Bu ek kaynaklar oluşturulmadı. Yerel testler binding entegrasyonunu doğrular; Cloudflare edge/WAF davranışını ölçmez.
 4. Güçlü scrypt Free planın 10 ms CPU bütçesine uygun varsayılamaz. Paid plan/uygun CPU bütçesi ve gerçek edge CPU-bellek ölçümü üretim ön koşuludur. Yerel başarı üretim kapasite testi değildir; parametreler düşük bütçeye uydurmak için zayıflatılmamalıdır. Plan değiştirilmedi/deploy yapılmadı.
-5. MFA, parola değiştirme/kurtarma, çalışan oluşturma, tüm cihazlardan çıkış ve idle timeout bu kapsamda yoktur. Açılmadan önce işletim ihtiyacına göre ayrı ele alınmalıdır. React login entegrasyonu hazırdır; gerçek ilk admin kurulumu ve üretim koşulları ayrıca operatör tarafından tamamlanmalıdır.
+5. Admin hesap oluşturma/rol/aktiflik ve parola sıfırlama [USERS.md](USERS.md) ile hazırdır. Pasifleştirme ve parola sıfırlama bütün mevcut oturumları atomik olarak iptal eder; reactivation eski oturumları canlandırmaz. MFA, employee self-service parola değiştirme/kurtarma, ayrı tüm cihazlardan çıkış ve idle timeout hâlâ yoktur. İlk gerçek admin kurulumu ve üretim koşulları ayrıca operatör tarafından tamamlanmalıdır.
 
 Kaynaklar: [Workers rate-limit kapsamı](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/), [Workers limitleri](https://developers.cloudflare.com/workers/platform/limits/), [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch), [D1 REST parametreli batch](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/query/).
 

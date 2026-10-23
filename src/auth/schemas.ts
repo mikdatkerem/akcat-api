@@ -8,6 +8,10 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(128),
 }).strict();
 export const bootstrapSchema = loginSchema.extend({ password: z.string().min(15).max(128) });
+export const strongPassword = bootstrapSchema.shape.password.refine(value => value.trim().length >= 15);
+export const changePasswordSchema = z.object({
+  current_password: z.string().min(1).max(128), new_password: strongPassword,
+}).strict();
 export const publicUserSchema = z.object({
   id: z.string(), username: z.string(), role: z.enum(["admin", "employee"]),
 });

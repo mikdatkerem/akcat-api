@@ -65,7 +65,7 @@ Sonrasında `d1_migrations` adları, `financial_adjustments` tablo/indeksleri ve
 
 İlk admin mevcut [AUTH.md](AUTH.md) güvenli TTY bootstrap yöntemiyle, hedef adı onayı ve gizli parola istemiyle **yetkili operatör** tarafından kurulur. Komut `npm.cmd run bootstrap:admin -- --remote` olup bu görevde çalıştırılmadı. Parola 15–128 karakter, benzersiz ve parola yöneticisinde saklanır; argüman, SQL metni veya ortam değişkeni olarak verilmez. Mevcut admin/kurulum kilidi varsa bootstrap tekrarlanmaz; `system:first-admin-bootstrap` silinmez. Ağ hatasında otomatik tekrar yerine durum doğrulanır.
 
-Employee oluşturma, parola değiştirme/kurtarma ve tüm cihazlardan çıkış üründe henüz yoktur. 3–4 kişilik kullanım için ayrı yetkilendirilmiş bir çalışma kapsamında güvenli, audit’li hesap sağlama/iptal yöntemi tamamlanmalı ve test edilmelidir. Ortak admin hesabını çalışanlarla paylaşmak çözüm değildir. Admin kilitlenirse kimliği doğrulanmış operatör kurtarma prosedürü ve tüm mevcut oturumların iptal edilmesi ayrıca gerekir.
+İlk admin kurulduktan sonra kişiye özel employee/admin hesaplarını yalnızca admin'e açık [Çalışanlar modülü](USERS.md) ile oluşturun. Gerçek hesaplar otomatik kurulmaz. Aktiflik/rol ve parola reseti audit'lidir; pasifleştirme/reset bütün mevcut oturumları iptal eder. Ortak admin hesabını paylaşmayın. Üretim açılmadan yetkili operatör gerçek hesapları manuel sağlamalıdır. MFA/employee self-service kurtarma ve ayrı tüm cihazlardan çıkış yoktur; tek admin parolasını kaybederse kimliği doğrulanmış operatör kurtarma prosedürü ayrıca gerekir. Yerel modül testleri gerçek hesap kurulumunu veya üretim staging ölçümünü tamamlamaz.
 
 ## 7. Gerçek edge staging ölçüm planı
 

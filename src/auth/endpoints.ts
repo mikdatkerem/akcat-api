@@ -51,10 +51,10 @@ export class Login extends OpenAPIRoute {
 }
 
 export class Me extends OpenAPIRoute {
-  schema = { tags: ["Auth"], summary: "Güncel kullanıcı ve oturum", responses: { "200": response(sessionResponseSchema) } };
+  schema = { tags: ["Auth"], summary: "Güncel kullanıcı ve oturum", responses: { "200": response(sessionResponseSchema.extend({ is_active: z.literal(true) })) } };
   async handle(c: AppContext) {
     const auth = c.get("auth");
-    return c.json({ user: auth.user, expiresAt: auth.expiresAt,
+    return c.json({ user: auth.user, is_active: true, expiresAt: auth.expiresAt,
       ...(auth.transport === "cookie" ? { csrfToken: csrfToken(auth.token) } : {}) });
   }
 }
