@@ -1,5 +1,6 @@
 import { tokenHash } from "../security/tokens";
-import { AuthError } from "../auth/errors";
+import { AuthError, forbidden } from "../auth/errors";
+import type { AuthSession } from "../types";
 import type { CreateProductInput, PatchProductInput, ProductQuery } from "./schemas";
 
 type Row = { id: string; name: string; current_price_kurus: number; is_active: number; created_at: string; updated_at: string };
@@ -58,7 +59,9 @@ export async function createProduct(db: D1Database, actor: string, key: string, 
   if (!audit || JSON.parse(audit.metadata).request_hash !== fingerprint) {
     throw new AuthError(409, "IDEMPOTENCY_CONFLICT", "Bu işlem anahtarı farklı bilgilerle kullanılmış. Ürün listesini kontrol edin.");
   }
-  return { product: present(results[3]?.results[0] as Row), created: results[0]?.meta.changes === 1 };
+  const product = results[3]?.results[0] as Row | undefined;
+  if (!product) throw new AuthError(409, "PRODUCT_DELETED", "Bu işlemle oluşturulan ürün daha sonra silinmiş. Ürün listesini yenileyin.");
+  return { product: present(product), created: results[0]?.meta.changes === 1 };
 }
 export async function patchProduct(db: D1Database, actor: string, id: string, input: PatchProductInput) {
   const entries = Object.entries(input).filter(([, value]) => value !== undefined);
@@ -77,4 +80,50 @@ export async function patchProduct(db: D1Database, actor: string, id: string, in
   const row = results[0]?.results[0] as Row | undefined;
   if (!row) throw missing();
   return present(row);
+}
+
+const inUse = () => new AuthError(409, "PRODUCT_IN_USE", "Bu ürün geçmiş satış kayıtlarında kullanıldığı için kalıcı olarak silinemez. Ürünü pasife alarak yeni satışlarda kullanılmasını engelleyebilirsiniz.");
+const deleteActorGate = `EXISTS(SELECT 1 FROM users actor JOIN sessions ses ON ses.user_id=actor.id
+  WHERE actor.id=? AND actor.role='admin' AND actor.is_active=1 AND ses.id=? AND ses.revoked_at IS NULL AND ses.expires_at>?)`;
+
+export async function deleteProduct(db: D1Database, auth: AuthSession, id: string, key: string) {
+  const operation = `product:delete:${tokenHash(auth.user.id + ":" + key)}`;
+  const attempt = crypto.randomUUID(), now = new Date().toISOString();
+  const session = db.withSession("first-primary");
+  let results: D1Result<Record<string, unknown>>[];
+  try {
+    // Reference check, live admin/session check, audit snapshot and deletion share one transaction.
+    // No status filter: cancelled sales also protect their product references.
+    results = await session.batch([
+      session.prepare(`SELECT ${deleteActorGate} AS allowed`).bind(auth.user.id, auth.id, now),
+      session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
+        SELECT ?, ?, 'product.deleted', 'product', p.id,
+          json_object('attempt', ?, 'name', p.name, 'current_price_kurus', p.current_price_kurus, 'is_active', p.is_active), ?
+        FROM products p WHERE p.id=? AND NOT EXISTS (SELECT 1 FROM sale_items WHERE product_id=p.id)
+          AND ${deleteActorGate} AND NOT EXISTS (SELECT 1 FROM audit_logs WHERE id=?)`)
+        .bind(operation, auth.user.id, attempt, now, id, auth.user.id, auth.id, now, operation),
+      session.prepare(`DELETE FROM products WHERE id=? AND NOT EXISTS (SELECT 1 FROM sale_items WHERE product_id=products.id)
+        AND EXISTS (SELECT 1 FROM audit_logs WHERE id=? AND json_extract(metadata, '$.attempt')=?)`)
+        .bind(id, operation, attempt),
+      session.prepare("SELECT entity_id FROM audit_logs WHERE id=? AND actor_user_id=?").bind(operation, auth.user.id),
+      session.prepare("SELECT id, EXISTS(SELECT 1 FROM sale_items WHERE product_id=products.id) AS used FROM products WHERE id=?").bind(id),
+    ]);
+  } catch (cause) {
+    // Foreign keys remain enabled; a constraint error rolls back the audit as well.
+    let error: unknown = cause;
+    for (let depth = 0; depth < 4 && error instanceof Error; depth++, error = error.cause) {
+      if (/FOREIGN KEY constraint failed/i.test(error.message)) throw inUse();
+    }
+    throw cause;
+  }
+  if (results[0]?.results[0]?.allowed !== 1) throw forbidden();
+  const audit = results[3]?.results[0];
+  if (audit) {
+    if (audit.entity_id !== id) throw new AuthError(409, "IDEMPOTENCY_CONFLICT", "Bu işlem anahtarı başka bir ürün için kullanılmış.");
+    return { success: true as const, id };
+  }
+  const product = results[4]?.results[0];
+  if (!product) throw missing();
+  if (product.used === 1) throw inUse();
+  throw new AuthError(409, "PRODUCT_DELETE_CONFLICT", "Ürün silinemedi. Listeyi yenileyip tekrar deneyin.");
 }

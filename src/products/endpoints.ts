@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AppContext } from "../types";
 import { AuthError } from "../auth/errors";
 import { createProductSchema, patchProductSchema, productParams, productQuery, productSchema } from "./schemas";
-import { createProduct, getProduct, listProducts, patchProduct } from "./repository";
+import { createProduct, deleteProduct, getProduct, listProducts, patchProduct } from "./repository";
 
 const json = <S extends z.ZodType>(schema: S) => ({ content: { "application/json": { schema } } });
 const single = { description: "Ürün", ...json(z.object({ data: productSchema })) };
@@ -42,5 +42,17 @@ export class ProductPatch extends OpenAPIRoute {
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
     return c.json({ data: await patchProduct(c.env.DB, c.get("auth").user.id, data.params.id, data.body) });
+  }
+}
+
+export class ProductDelete extends OpenAPIRoute {
+  schema = { tags: ["Products"], summary: "Satışlarda kullanılmamış ürünü kalıcı sil (admin)", request: {
+    params: productParams, headers: z.object({ "idempotency-key": z.uuid() }),
+  }, responses: { "200": { description: "Ürün silindi veya aynı silme işlemi tekrarlandı",
+    ...json(z.object({ success: z.literal(true), id: z.uuid() })) },
+    "409": { description: "Ürün geçmiş satışlarda kullanılmış veya işlem anahtarı çakışıyor" } } };
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
+    return c.json(await deleteProduct(c.env.DB, c.get("auth"), data.params.id, data.headers["idempotency-key"]));
   }
 }

@@ -10,7 +10,7 @@ import { Login, Logout, Me } from "./auth/endpoints";
 import { ChangePassword, passwordChangeLimit } from "./auth/changePassword";
 import { apiBoundary, authBoundary, authenticate, loginIpLimit, loginOrigin, requireCsrf, requireRole } from "./auth/middleware";
 import { CustomerList, CustomerGet, CustomerCreate, CustomerPatch } from "./customers/endpoints";
-import { ProductList, ProductGet, ProductCreate, ProductPatch } from "./products/endpoints";
+import { ProductList, ProductGet, ProductCreate, ProductPatch, ProductDelete } from "./products/endpoints";
 import { SaleCreate, SaleList, SaleGet } from "./sales/endpoints";
 import { PaymentCreate, PaymentList, ReceivableList, CustomerLedger, CustomerReceivables } from "./finance/endpoints";
 import { SaleCancel, CorrectionCreate, CorrectionList, CorrectionGet, CorrectionApprove, CorrectionReject } from "./corrections/endpoints";
@@ -92,7 +92,7 @@ openapi.post("/api/v1/customers", CustomerCreate);
 openapi.get("/api/v1/customers/:id", CustomerGet);
 openapi.patch("/api/v1/customers/:id", CustomerPatch);
 
-const productSecurity = [apiBoundary(["GET", "POST", "PATCH", "OPTIONS"], ["Idempotency-Key"]),
+const productSecurity = [apiBoundary(["GET", "POST", "PATCH", "DELETE", "OPTIONS"], ["Idempotency-Key"]),
   authenticate, requireRole("admin", "employee"), requireCsrf] as const;
 app.use("/api/v1/products", ...productSecurity);
 app.use("/api/v1/products/*", ...productSecurity);
@@ -108,6 +108,7 @@ app.use("/api/v1/products", async (c, next) => {
   await next();
 });
 app.use("/api/v1/products/*", async (c, next) => {
+  if (c.req.method === "DELETE") await requireRole("admin")(c, async () => {});
   if (c.req.method === "PATCH") {
     await requireRole("admin")(c, async () => {});
     if (c.req.header("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
@@ -120,6 +121,7 @@ openapi.get("/api/v1/products", ProductList);
 openapi.post("/api/v1/products", ProductCreate);
 openapi.get("/api/v1/products/:id", ProductGet);
 openapi.patch("/api/v1/products/:id", ProductPatch);
+openapi.delete("/api/v1/products/:id", ProductDelete);
 
 const saleSecurity = [apiBoundary(["GET", "POST", "OPTIONS"], ["Idempotency-Key"]),
   authenticate, requireRole("admin", "employee"), requireCsrf] as const;
