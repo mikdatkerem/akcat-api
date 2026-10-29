@@ -24,7 +24,7 @@ export async function getSale(db: D1Database, id: string, actor?: PublicUser) {
   const results = await session.batch<Record<string, unknown>>([
     session.prepare(`${summarySelect} WHERE s.id = ?`).bind(...params),
     session.prepare(`SELECT c.id, c.name, c.phone, c.address FROM customers c JOIN sales s ON s.customer_id = c.id WHERE s.id = ?`).bind(...params),
-    session.prepare(`SELECT i.id, i.product_id, i.product_name_snapshot, i.unit_price_kurus, i.quantity, i.line_total_kurus
+    session.prepare(`SELECT i.id, i.product_id, i.product_name_snapshot, i.list_unit_price_kurus, i.unit_price_kurus, i.quantity, i.line_total_kurus
       FROM sale_items i JOIN sales s ON s.id = i.sale_id WHERE s.id = ? ORDER BY i.id`).bind(...params),
     session.prepare(`SELECT p.id, p.amount_kurus, p.method, p.created_at, p.created_by, u.username AS created_by_username,
       CASE WHEN p.idempotency_key = 'initial:' || s.idempotency_key THEN 1 ELSE 0 END AS is_initial
@@ -82,10 +82,15 @@ export async function createSale(db: D1Database, actor: string, key: string, inp
   // Each line is bounded BEFORE multiplication; 50 safe lines sum below SQLite's signed 64-bit maximum.
   const results = await session.batch([
     session.prepare(`WITH requested AS (
-      SELECT json_extract(value, '$.product_id') AS product_id, json_extract(value, '$.quantity') AS quantity FROM json_each(?)
+      SELECT json_extract(value, '$.product_id') AS product_id, json_extract(value, '$.quantity') AS quantity,
+        json_extract(value, '$.unit_price_kurus') AS unit_price_kurus FROM json_each(?)
     ), priced AS (
       SELECT CASE WHEN p.is_active = 1 AND typeof(p.current_price_kurus) = 'integer' AND p.current_price_kurus >= 0
-        AND p.current_price_kurus <= ${MAX} / r.quantity THEN p.current_price_kurus * r.quantity ELSE NULL END AS line_total
+        AND p.current_price_kurus <= ${MAX}
+        AND typeof(coalesce(r.unit_price_kurus, p.current_price_kurus)) = 'integer'
+        AND coalesce(r.unit_price_kurus, p.current_price_kurus) > 0
+        AND coalesce(r.unit_price_kurus, p.current_price_kurus) <= ${MAX} / r.quantity
+        THEN coalesce(r.unit_price_kurus, p.current_price_kurus) * r.quantity ELSE NULL END AS line_total
       FROM requested r LEFT JOIN products p ON p.id = r.product_id
     ) INSERT INTO sales (id, customer_id, created_by, status, total_kurus, idempotency_key, created_at, updated_at)
     SELECT ?, ?, ?, 'completed', sum(line_total), ?, ?, ? FROM priced
@@ -93,9 +98,11 @@ export async function createSale(db: D1Database, actor: string, key: string, inp
       AND EXISTS (SELECT 1 FROM customers WHERE id = ? AND is_active = 1)
       AND NOT EXISTS (SELECT 1 FROM sales WHERE idempotency_key = ?)`)
       .bind(requested, id, input.customer_id, actor, operation, now, now, items.length, input.payment.amount_kurus, input.customer_id, operation),
-    session.prepare(`INSERT INTO sale_items (id, sale_id, product_id, product_name_snapshot, unit_price_kurus, quantity, line_total_kurus)
+    session.prepare(`INSERT INTO sale_items (id, sale_id, product_id, product_name_snapshot, list_unit_price_kurus, unit_price_kurus, quantity, line_total_kurus)
       SELECT json_extract(j.value, '$.id'), s.id, p.id, p.name, p.current_price_kurus,
-        json_extract(j.value, '$.quantity'), p.current_price_kurus * json_extract(j.value, '$.quantity')
+        coalesce(json_extract(j.value, '$.unit_price_kurus'), p.current_price_kurus),
+        json_extract(j.value, '$.quantity'),
+        coalesce(json_extract(j.value, '$.unit_price_kurus'), p.current_price_kurus) * json_extract(j.value, '$.quantity')
       FROM sales s JOIN json_each(?) j JOIN products p ON p.id = json_extract(j.value, '$.product_id') WHERE s.id = ?`)
       .bind(requested, id),
     session.prepare(`INSERT INTO payments (id, customer_id, sale_id, amount_kurus, method, created_by, idempotency_key, created_at)

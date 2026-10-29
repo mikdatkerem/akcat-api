@@ -5,7 +5,7 @@ Cloudflare Workers + TypeScript üzerinde Hono yönlendirmesi, Chanfana OpenAPI 
 - Giriş noktası: src/index.ts
 - Yapılandırma: wrangler.jsonc
 - D1 binding: DB → akcat-db
-- Migration: `migrations/0001_initial_schema.sql` dokuz temel tabloyu; `0002_financial_adjustments.sql` ek düzeltme tablosu/indekslerini tanımlar. Yerel ve canlı migration durumları ayrıdır.
+- Migration: `migrations/0001_initial_schema.sql` dokuz temel tabloyu; `0002_financial_adjustments.sql` ek düzeltme tablosu/indekslerini; `0003_sale_item_list_price.sql` satış anındaki nullable liste fiyatı snapshot'ını tanımlar. 0003 eski fiyatları doldurmaz. Yeni fiyatlandırma API'sinden önce operatör tarafından uygulanmalıdır; migration otomatik çalıştırılmaz. Yerel ve canlı migration durumları ayrıdır.
 - Sağlık kontrolü: GET /api/health; SELECT 1 ile D1 bağlantısını okur. Şemayı/migration durumunu doğrulamaz.
 - OpenAPI arayüzü: /
 - İş endpoint’leri /api/v1 altındadır.

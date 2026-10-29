@@ -4,8 +4,9 @@ export const money = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 export const paymentMethod = z.enum(["cash", "card", "bank"]);
 export const createSaleSchema = z.object({
   customer_id: z.uuid(),
-  // Unknown client prices/totals are stripped; only identity and quantity influence pricing.
-  items: z.array(z.object({ product_id: z.uuid(), quantity: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }))
+  // Only the optional unit price is writable; line/sale totals and list snapshots remain server-owned.
+  items: z.array(z.object({ product_id: z.uuid(), quantity: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    unit_price_kurus: money.min(1).optional() }))
     .min(1).max(50).refine(items => new Set(items.map(item => item.product_id)).size === items.length),
   payment: z.object({ amount_kurus: money, method: paymentMethod.nullable().optional() })
     .refine(value => value.amount_kurus === 0 || !!value.method)
@@ -28,7 +29,7 @@ export const saleDetailSchema = saleSummarySchema.extend({
     correction_id: z.string().nullable(), approved_by: z.string().nullable() }).passthrough()),
   cancellation_eligibility: z.object({ allowed: z.boolean(), expires_at: z.string().nullable(), explanation: z.string() }),
   customer: z.object({ id: z.uuid(), name: z.string(), phone: z.string().nullable(), address: z.string() }),
-  items: z.array(z.object({ id: z.uuid(), product_id: z.uuid(), product_name_snapshot: z.string(), unit_price_kurus: money,
+  items: z.array(z.object({ id: z.uuid(), product_id: z.uuid(), product_name_snapshot: z.string(), list_unit_price_kurus: money.nullable(), unit_price_kurus: money,
     quantity: z.number().int().positive(), line_total_kurus: money })),
   payments: z.array(z.object({ id: z.uuid(), amount_kurus: money, method: paymentMethod, created_at: z.string(),
     created_by: z.uuid(), created_by_username: z.string(), is_initial: z.boolean() })),

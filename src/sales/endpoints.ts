@@ -7,7 +7,7 @@ import { createSale, getSale, listSales } from "./repository";
 
 const json = <S extends z.ZodType>(schema: S) => ({ content: { "application/json": { schema } } });
 const single = { description: "Satış ve geçerli ödeme hareketleri", ...json(z.object({ data: saleDetailSchema })) };
-const invalid = () => new AuthError(400, "INVALID_SALE_INPUT", "Müşteriyi, ürün miktarlarını, ödeme ve filtre alanlarını kontrol edin.");
+const invalid = () => new AuthError(400, "INVALID_SALE_INPUT", "Müşteriyi, ürün miktarlarını, pozitif tam sayı kuruş birim fiyatlarını, ödeme ve filtre alanlarını kontrol edin.");
 export class SaleCreate extends OpenAPIRoute {
   schema = { tags: ["Sales"], summary: "Teslim edilmiş satış ve varsa ilk ödeme", request: {
     headers: z.object({ "idempotency-key": z.uuid() }), body: { required: true, ...json(createSaleSchema) },
