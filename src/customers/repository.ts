@@ -90,11 +90,13 @@ export async function patchCustomer(db: D1Database, actor: string, id: string, i
 }
 
 // Debt/ledger are derived from sales/payments; corrections retain those same targets.
-// Only the technical creation audit is exempt. Updates and every other customer audit block deletion.
+// Customer edits/status changes are not financial history. Keep their audits without blocking deletion.
+// Unknown customer audit actions still block deletion; financial references are always protected.
 const customerHistory = `EXISTS(SELECT 1 FROM sales WHERE customer_id=c.id)
   OR EXISTS(SELECT 1 FROM payments WHERE customer_id=c.id)
   OR EXISTS(SELECT 1 FROM financial_adjustments WHERE customer_id=c.id)
-  OR EXISTS(SELECT 1 FROM audit_logs WHERE entity_type='customer' AND entity_id=c.id AND action<>'customer.created')`;
+  OR EXISTS(SELECT 1 FROM audit_logs WHERE entity_type='customer' AND entity_id=c.id
+    AND action NOT IN ('customer.created','customer.updated'))`;
 const deleteActorGate = `EXISTS(SELECT 1 FROM users actor JOIN sessions ses ON ses.user_id=actor.id
   WHERE actor.id=? AND actor.role='admin' AND actor.is_active=1 AND ses.id=? AND ses.revoked_at IS NULL AND ses.expires_at>?)`;
 const customerInUse = () => new AuthError(409, "CUSTOMER_IN_USE", "Bu müşterinin geçmiş işlem kayıtları bulunduğu için kalıcı olarak silinemez. Müşteriyi pasife alabilirsiniz.");
