@@ -1,5 +1,6 @@
 import { tokenHash } from "../security/tokens";
-import { AuthError } from "../auth/errors";
+import { AuthError, forbidden } from "../auth/errors";
+import type { AuthSession } from "../types";
 import type { CreateCustomerInput, PatchCustomerInput, CustomerQuery } from "./schemas";
 
 type Row = { id: string; name: string; phone: string | null; address: string; delivery_notes: string | null;
@@ -65,7 +66,9 @@ export async function createCustomer(db: D1Database, actor: string, key: string,
   if (!audit || JSON.parse(audit.metadata).request_hash !== fingerprint) {
     throw new AuthError(409, "IDEMPOTENCY_CONFLICT", "Bu işlem anahtarı farklı bilgilerle kullanılmış. Müşteri listesini kontrol edin.");
   }
-  return { customer: present(results[3]?.results[0] as Row), created: results[0]?.meta.changes === 1 };
+  const customer = results[3]?.results[0] as Row | undefined;
+  if (!customer) throw new AuthError(409, "CUSTOMER_DELETED", "Bu işlemle oluşturulan müşteri daha sonra silinmiş. Müşteri listesini yenileyin.");
+  return { customer: present(customer), created: results[0]?.meta.changes === 1 };
 }
 
 export async function patchCustomer(db: D1Database, actor: string, id: string, input: PatchCustomerInput) {
@@ -84,4 +87,50 @@ export async function patchCustomer(db: D1Database, actor: string, id: string, i
   const row = results[0]?.results[0] as Row | undefined;
   if (!row) throw missingCustomer();
   return present(row);
+}
+
+// Debt/ledger are derived from sales/payments; corrections retain those same targets.
+// Only the technical creation audit is exempt. Updates and every other customer audit block deletion.
+const customerHistory = `EXISTS(SELECT 1 FROM sales WHERE customer_id=c.id)
+  OR EXISTS(SELECT 1 FROM payments WHERE customer_id=c.id)
+  OR EXISTS(SELECT 1 FROM financial_adjustments WHERE customer_id=c.id)
+  OR EXISTS(SELECT 1 FROM audit_logs WHERE entity_type='customer' AND entity_id=c.id AND action<>'customer.created')`;
+const deleteActorGate = `EXISTS(SELECT 1 FROM users actor JOIN sessions ses ON ses.user_id=actor.id
+  WHERE actor.id=? AND actor.role='admin' AND actor.is_active=1 AND ses.id=? AND ses.revoked_at IS NULL AND ses.expires_at>?)`;
+const customerInUse = () => new AuthError(409, "CUSTOMER_IN_USE", "Bu müşterinin geçmiş işlem kayıtları bulunduğu için kalıcı olarak silinemez. Müşteriyi pasife alabilirsiniz.");
+
+export async function deleteCustomer(db: D1Database, auth: AuthSession, id: string, key: string) {
+  const operation = `customer:delete:${tokenHash(auth.user.id + ":" + key)}`;
+  const attempt = crypto.randomUUID(), now = new Date().toISOString(), session = db.withSession("first-primary");
+  let rows: D1Result<Record<string, unknown>>[];
+  try {
+    rows = await session.batch([
+      session.prepare(`SELECT ${deleteActorGate} AS allowed`).bind(auth.user.id, auth.id, now),
+      // Keep existing audits; do not copy names, addresses, phones or notes into deletion metadata.
+      session.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,entity_type,entity_id,metadata,created_at)
+        SELECT ?,?,'customer.deleted','customer',c.id,json_object('attempt',?),? FROM customers c
+        WHERE c.id=? AND NOT (${customerHistory}) AND ${deleteActorGate}
+          AND NOT EXISTS(SELECT 1 FROM audit_logs WHERE id=?)`)
+        .bind(operation, auth.user.id, attempt, now, id, auth.user.id, auth.id, now, operation),
+      session.prepare(`DELETE FROM customers WHERE id=?
+        AND EXISTS(SELECT 1 FROM audit_logs WHERE id=? AND json_extract(metadata,'$.attempt')=?)`).bind(id, operation, attempt),
+      session.prepare("SELECT entity_id FROM audit_logs WHERE id=? AND actor_user_id=?").bind(operation, auth.user.id),
+      session.prepare(`SELECT c.id,(${customerHistory}) AS history FROM customers c WHERE c.id=?`).bind(id),
+    ]);
+  } catch (cause) {
+    let error: unknown = cause;
+    for (let depth = 0; depth < 4 && error instanceof Error; depth++, error = error.cause) {
+      if (/FOREIGN KEY constraint failed/i.test(error.message)) throw customerInUse();
+    }
+    throw cause;
+  }
+  if (rows[0]?.results[0]?.allowed !== 1) throw forbidden();
+  const audit = rows[3]?.results[0], customer = rows[4]?.results[0];
+  if (audit) {
+    if (audit.entity_id !== id) throw new AuthError(409, "IDEMPOTENCY_CONFLICT", "Bu işlem anahtarı başka bir müşteri için kullanılmış.");
+    return { success: true as const, id };
+  }
+  if (!customer) throw missingCustomer();
+  if (customer.history === 1) throw customerInUse();
+  throw new AuthError(409, "CUSTOMER_DELETE_CONFLICT", "Müşteri silinemedi. Listeyi yenileyip tekrar deneyin.");
 }

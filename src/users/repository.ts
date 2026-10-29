@@ -52,7 +52,8 @@ export async function createUser(db: D1Database, auth: AuthSession, key: string,
   assertActor(rows[0]!);
   const audit = rows[3]!.results[0];
   if (!audit) throw new AuthError(409, "USERNAME_TAKEN", "Bu kullanıcı adı zaten kullanılıyor.");
-  const original = JSON.parse(String(audit.metadata)), row = rows[4]!.results[0] as Row;
+  const original = JSON.parse(String(audit.metadata)), row = rows[4]!.results[0] as Row | undefined;
+  if (!row) throw new AuthError(409, "USER_DELETED", "Bu işlemle oluşturulan hesap daha sonra silinmiş. Çalışan listesini yenileyin.");
   const created = rows[2]!.meta.changes === 1;
   if (original.username !== input.username || original.role !== input.role || (!created && !await verifyPassword(input.password, row.password_hash))) throw conflict();
   return { user: present(row), created };
@@ -119,4 +120,60 @@ export async function resetPassword(db: D1Database, auth: AuthSession, id: strin
   if (!audit) throw missing();
   if (!row || audit.entity_id !== id || (rows[2]!.meta.changes !== 1 && !await verifyPassword(password, row.password_hash))) throw conflict();
   return present(row);
+}
+
+// Include cancelled sales, reversed payments, rejected requests and all adjustment actors.
+const financialHistory = `EXISTS(SELECT 1 FROM sales WHERE created_by=u.id)
+  OR EXISTS(SELECT 1 FROM payments WHERE created_by=u.id)
+  OR EXISTS(SELECT 1 FROM correction_requests WHERE requested_by=u.id OR reviewed_by=u.id)
+  OR EXISTS(SELECT 1 FROM financial_adjustments WHERE requested_by=u.id OR performed_by=u.id OR approved_by=u.id)`;
+// Never detach/delete audit actors. Target-only account-management audits are retained.
+const auditHistory = `EXISTS(SELECT 1 FROM audit_logs WHERE actor_user_id=u.id)
+  OR EXISTS(SELECT 1 FROM audit_logs WHERE entity_type='user' AND entity_id=u.id
+    AND action NOT IN ('user.created','user.updated','user.password_reset'))`;
+const userInUse = () => new AuthError(409, "USER_IN_USE", "Bu hesap geçmiş denetim veya ilişkili kayıtlarda yer aldığı için kalıcı olarak silinemez. Hesabını pasife alabilirsiniz.");
+
+export async function deleteUser(db: D1Database, auth: AuthSession, id: string, key: string) {
+  const operation = `user:delete:${tokenHash(auth.user.id + ":" + key)}`;
+  const attempt = crypto.randomUUID(), now = new Date().toISOString(), session = db.withSession("first-primary");
+  let rows: D1Result<Record<string, unknown>>[];
+  try {
+    // One transaction protects the actor, last admin, references, sessions and audit.
+    rows = await session.batch([
+      allowedStatement(session, auth, now),
+      session.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,entity_type,entity_id,metadata,created_at)
+        SELECT ?,?,'user.deleted','user',u.id,json_object('attempt',?,'username',u.username,'role',u.role,'is_active',u.is_active),?
+        FROM users u WHERE u.id=? AND u.id<>? AND ${actorGate}
+          AND (u.role<>'admin' OR u.is_active<>1 OR (SELECT count(*) FROM users WHERE role='admin' AND is_active=1)>1)
+          AND NOT (${financialHistory}) AND NOT (${auditHistory})
+          AND NOT EXISTS(SELECT 1 FROM audit_logs WHERE id=?)`)
+        .bind(operation, auth.user.id, attempt, now, id, auth.user.id, auth.user.id, auth.id, now, operation),
+      // Session rows are authentication state, never business history. Removing them invalidates every token.
+      session.prepare(`DELETE FROM sessions WHERE user_id=? AND ${attemptGate}`).bind(id, operation, attempt),
+      session.prepare(`DELETE FROM users WHERE id=? AND ${attemptGate}`).bind(id, operation, attempt),
+      session.prepare("SELECT entity_id FROM audit_logs WHERE id=? AND actor_user_id=?").bind(operation, auth.user.id),
+      session.prepare(`SELECT u.id,u.role,u.is_active,(${financialHistory}) AS financial_history,(${auditHistory}) AS audit_history,
+        (SELECT count(*) FROM users WHERE role='admin' AND is_active=1) AS active_admins FROM users u WHERE u.id=?`).bind(id),
+    ]);
+  } catch (cause) {
+    let error: unknown = cause;
+    for (let depth = 0; depth < 4 && error instanceof Error; depth++, error = error.cause) {
+      if (/FOREIGN KEY constraint failed/i.test(error.message)) throw userInUse();
+    }
+    throw cause;
+  }
+  assertActor(rows[0]!);
+  const audit = rows[4]?.results[0], user = rows[5]?.results[0];
+  if (audit) {
+    if (audit.entity_id !== id) throw conflict();
+    return { success: true as const, id };
+  }
+  if (!user) throw missing();
+  if (id === auth.user.id) throw new AuthError(409, "SELF_ACCOUNT_DELETE", "Kendi hesabınızı silemezsiniz.");
+  if (user.role === "admin" && user.is_active === 1 && Number(user.active_admins) <= 1) {
+    throw new AuthError(409, "LAST_ACTIVE_ADMIN", "Son aktif admin hesabı silinemez.");
+  }
+  if (user.financial_history === 1) throw new AuthError(409, "USER_FINANCIAL_HISTORY", "Bu çalışan geçmiş finansal işlemlerde yer aldığı için kalıcı olarak silinemez. Hesabını pasife alabilirsiniz.");
+  if (user.audit_history === 1) throw userInUse();
+  throw new AuthError(409, "USER_DELETE_CONFLICT", "Hesap silinemedi. Çalışan listesini yenileyip tekrar deneyin.");
 }

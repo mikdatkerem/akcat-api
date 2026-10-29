@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AppContext } from "../types";
 import { AuthError } from "../auth/errors";
 import { createUserSchema, patchUserSchema, resetPasswordSchema, userSchema, userPageSchema, userQuery, userParams, mutationHeaders } from "./schemas";
-import { createUser, patchUser, resetPassword, getUser, listUsers } from "./repository";
+import { createUser, patchUser, resetPassword, getUser, listUsers, deleteUser } from "./repository";
 const json = <S extends z.ZodType>(schema: S) => ({ content: { "application/json": { schema } } });
 const single = { description: "Hesap bilgileri; gizli alan içermez", ...json(z.object({ data: userSchema })) };
 const invalid = () => new AuthError(400, "INVALID_USER_INPUT", "Kullanıcı adı, rol, hesap durumu ve parolayı (15–128 karakter) kontrol edin.");
@@ -26,4 +26,13 @@ export class UserPatch extends OpenAPIRoute {
 export class UserResetPassword extends OpenAPIRoute {
   schema = { tags: ["Users"], summary: "Parolayı sıfırla ve tüm oturumları iptal et (admin)", request: { params: userParams, headers: mutationHeaders, body: { required: true, ...json(resetPasswordSchema) } }, responses: { "200": single } };
   async handle(c: AppContext) { const { body, params, headers } = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); }); return c.json({ data: await resetPassword(c.env.DB, c.get("auth"), params.id, headers["idempotency-key"], body.password) }); }
+}
+export class UserDelete extends OpenAPIRoute {
+  schema = { tags: ["Users"], summary: "Geçmişi olmayan hesabı kalıcı sil (admin)", request: { params: userParams, headers: mutationHeaders },
+    responses: { "200": { description: "Silindi veya aynı silme işlemi tekrarlandı", ...json(z.object({ success: z.literal(true), id: z.uuid() })) },
+      "409": { description: "Kendi hesabı, son aktif admin, geçmiş kayıt veya işlem anahtarı çakışması" } } };
+  async handle(c: AppContext) {
+    const { params, headers } = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
+    return c.json(await deleteUser(c.env.DB, c.get("auth"), params.id, headers["idempotency-key"]));
+  }
 }

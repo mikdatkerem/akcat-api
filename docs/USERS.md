@@ -11,8 +11,9 @@ Yalnızca `admin` erişir. Mevcut Hono/Chanfana, cookie oturumu, exact Origin/CS
 | `GET /api/v1/users/:id` | UUID | `200 {data:ManagedUser}` |
 | `PATCH /api/v1/users/:id` | `{username?,role?,is_active?}`; en az bir alan | `200 {data:ManagedUser}` |
 | `POST /api/v1/users/:id/reset-password` | `{password}` | `200 {data:ManagedUser}`; bütün mevcut oturumlar iptal edilir |
+| `DELETE /api/v1/users/:id` | UUID hedef + UUID `Idempotency-Key`; gövdesiz | `200 {success:true,id}`; kendi hesap/son aktif admin/geçmiş için `409` |
 
-**Bütün yazmalarda** UUID `Idempotency-Key`, JSON ve cookie istemcisinde izinli Origin/oturuma bağlı `X-CSRF-Token` zorunludur. Gövde sınırı 4 KiB. Bilinmeyen yazma alanları reddedilir. `ManagedUser`: yalnızca `id,username,role,is_active,created_at,updated_at`; parola/hash/oturum tokenı yoktur. `is_active` JSON boolean; tarihler UTC ISO.
+**Bütün yazmalarda** UUID `Idempotency-Key` ve cookie istemcisinde izinli Origin/oturuma bağlı `X-CSRF-Token` zorunludur. POST/PATCH JSON; DELETE gövdesizdir. Aynı origin allowlist'inde kullanıcı endpoint'leri için DELETE açılmıştır. Gövde sınırı 4 KiB. Bilinmeyen yazma alanları reddedilir. `ManagedUser`: yalnızca `id,username,role,is_active,created_at,updated_at`; parola/hash/oturum tokenı yoktur. `is_active` JSON boolean; tarihler UTC ISO.
 
 Kullanıcı adı login ile aynı NFKC → kırpma → Türkçe küçük harf normalleştirmesini kullanır; 3–64 harf/rakam veya `. _ -`, ham girdi en fazla 128 karakter. Parola 15–128 karakter, dış boşluklar hariç en az 15 karakterdir; parola değiştirilmeden scrypt'e verilir. Benzersiz uzun parola/parola yöneticisi kullanılmalıdır. Yeni hesap aktif, varsayılan rol `employee`; yalnızca `admin` veya `employee` kabul edilir. Kullanıcı adı normalize edilmiş değerle UNIQUE'dir.
 
@@ -20,13 +21,31 @@ Liste varsayılan 1/20, sayfa en çok 100000 ve boyut en çok 100'dür. Literal 
 
 ## Yetki, audit ve eşzamanlılık
 
-Middleware her istekte güncel rol/aktifliği okur; employee, tüm beş endpoint'te doğrulamadan önce 403 alır. Yazma batch'i ayrıca işlemi yapan kullanıcının **hâlâ aktif admin** ve ilgili oturumun **hâlâ geçerli/iptal edilmemiş** olduğunu doğrular. Hash hesaplaması sürerken yetkisi veya oturumu alınan admin bu kontrolü aşamaz.
+Middleware her istekte güncel rol/aktifliği okur; employee, tüm altı endpoint'te doğrulamadan önce 403 alır. Yazma batch'i ayrıca işlemi yapan kullanıcının **hâlâ aktif admin** ve ilgili oturumun **hâlâ geçerli/iptal edilmemiş** olduğunu doğrular. Hash hesaplaması sürerken yetkisi veya oturumu alınan admin bu kontrolü aşamaz.
 
 Admin kendisini pasife alamaz veya employee yapamaz. Hedef son aktif adminse rol düşürme/pasifleştirme aynı transaction içindeki güncel aktif admin sayımıyla engellenir. İki adminin eşzamanlı birbirini değiştirmesi en az bir aktif admin bırakır. UI kontrolleri tek başına güvenlik değildir.
 
 Audit ve yazma bir D1 `batch` içindedir: `user.created`, `user.updated`, `user.password_reset`. Rol/aktiflik/kullanıcı adı değişiminde önce/sonra ve actor/target/zaman korunur; parola sıfırlamada yalnızca alan adı ve işlem izi tutulur. Parola, parola hash'i veya hızlı parola digest'i audit'e yazılmaz. Audit hatasında kullanıcı/oturum değişikliği bütünüyle geri alınır. Parametreli SQL ve sabit sorgu parçaları kullanılır. [D1 atomik batch davranışı](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch).
 
-Pasifleştirme tüm mevcut oturumları atomik olarak iptal eder; yeniden aktifleştirme eski oturumları canlandırmaz. Rol değişikliğinde oturum iptal edilmez; mevcut middleware güncel rolü **sonraki API isteğinde** uygular. Kullanıcı adı değişikliği ID'yi veya geçmiş FK ilişkilerini değiştirmez. Eski ekranlardaki actor etiketi mevcut kullanıcı adını gösterebilir; finansal kayıtlar yeniden yazılmaz. Fiziksel silme endpoint'i yoktur.
+Pasifleştirme tüm mevcut oturumları atomik olarak iptal eder; yeniden aktifleştirme eski oturumları canlandırmaz. Rol değişikliğinde oturum iptal edilmez; mevcut middleware güncel rolü **sonraki API isteğinde** uygular. Kullanıcı adı değişikliği ID'yi veya geçmiş FK ilişkilerini değiştirmez. Eski ekranlardaki actor etiketi mevcut kullanıcı adını gösterebilir; finansal kayıtlar yeniden yazılmaz.
+
+## Kalıcı hesap silme
+
+Admin kendi hesabını silemez (`409 SELF_ACCOUNT_DELETE`). Hedef son aktif adminse aynı yazma transaction'ındaki güncel sayımla korunur (`409 LAST_ACTIVE_ADMIN`). Aktif/pasif olması diğer silme koşullarını değiştirmez. Admin hesapları da bu kurallara tabidir.
+
+`sales.created_by`, `payments.created_by`, `correction_requests.requested_by/reviewed_by` ve `financial_adjustments.requested_by/performed_by/approved_by` kontrol edilir. İptal/ters kayıt/reddedilmiş talep de geçmiş sayılır. Bunlardan biri varsa `409 USER_FINANCIAL_HISTORY` ve pasife alma önerisi döner. Hiçbir finansal kayıt silinmez, actor değiştirilmez.
+
+`audit_logs.actor_user_id` bağı da silmeyi engeller (`409 USER_IN_USE`): **giriş yapmış fakat finansal işlem yapmamış hesap, auth.login denetim kaydı nedeniyle de korunur.** Audit aktörünü NULL yapmak veya audit silmek yerine mevcut pasife alma kullanılır. Hedef olarak bağlı `user.created/user.updated/user.password_reset` yönetim audit'leri silinmeden korunabilir; diğer kullanıcı hedefli audit'ler engeldir. Silme audit'i hedef kullanıcı adı/rol/durumunu korur; parola/hash/token içermez.
+
+Primary D1 batch'inde canlı admin/oturum doğrulaması, referans/son admin kontrolü, `user.deleted` audit'i, yalnızca uygun hedefin teknik oturum satırlarının temizlenmesi ve kullanıcı silme birlikte atomiktir. Oturumlar silinince eski cookie/token doğrulanamaz. FK'ler açık kalır; bilinmeyen başka FK engelinde bütün batch geri alınır ve `409 USER_IN_USE` döner. Giriş veya finansal yazmayla yarışta kayıtlar kısmen silinmez. CASCADE/finansal geçmiş temizleme yoktur.
+
+Audit PK'si `user:delete:` + actor/UUID hash'idir. Aynı hedef/anahtar tekrarında `200`, başka hedefle aynı anahtarda `409 IDEMPOTENCY_CONFLICT`, yeni anahtarla eksik hedefte `404 USER_NOT_FOUND` döner. Silinen hesabın eski create anahtarı yeni hesap üretmez; `409 USER_DELETED` döner.
+
+Çalışan listesinde admin İşlemler menüsünden Sil'i seçer; ortak `DeleteConfirmation` modalı kullanıcı adını açık gösterir, ilk odağı Vazgeç'e verir, klavye odağını sınırlar ve gönderimde çift tıklama/kapatmayı engeller. Kendi hesabında Sil devre dışıdır. Başarıda liste yeniden yüklenir. Pasife alma mevcut Düzenle formundan yapılır. Ürün, müşteri ve hesap aynı silme modalını kullanır.
+
+Bu geliştirmede yeni migration/paket yoktur; gerçek D1, test, build veya deploy çalıştırılmadı. Web/API kaynak TypeScript ve değişen kaynakların lint kontrolleri başarılıdır; aşağıdaki eski modül test sonuçları yeni silme özelliğinin test edildiği anlamına gelmez. Tarayıcı/yarış davranışları runtime'da doğrulanmadı.
+
+Değişen API kaynakları: `src/users/repository.ts`, `src/users/endpoints.ts`, `src/index.ts`; web: `src/users/UsersPage.tsx`, `src/services/users.ts`, `src/services/apiClient.ts`, ortak `src/components/DeleteRecordAction.tsx`, `src/components/ui/{DeleteConfirmation.tsx,index.ts,ui.css}`. Ortak modal için `src/products/ProductActions.tsx` ve `products.css` da güncellendi. Müşteri dosyaları [CUSTOMERS.md](CUSTOMERS.md#kalıcı-silme-ve-pasife-alma) içindedir. Önce API klasöründe `npm.cmd run deploy`, sonra web klasöründe `npm.cmd run deploy` operatör tarafından çalıştırılır; web komutu build içerir. Önceki bekleyen migration'lar ayrı yayın ön koşuludur; bu görevde uygulanmadı.
 
 ## Tekrar güvenliği ve parola sıfırlama
 

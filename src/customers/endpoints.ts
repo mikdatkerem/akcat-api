@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AppContext } from "../types";
 import { AuthError, forbidden } from "../auth/errors";
 import { createCustomerSchema, patchCustomerSchema, customerParams, customerQuery, customerSchema } from "./schemas";
-import { createCustomer, getCustomer, listCustomers, patchCustomer } from "./repository";
+import { createCustomer, getCustomer, listCustomers, patchCustomer, deleteCustomer } from "./repository";
 
 const json = <S extends z.ZodType>(schema: S) => ({ content: { "application/json": { schema } } });
 const single = { description: "Müşteri", ...json(z.object({ data: customerSchema })) };
@@ -43,5 +43,15 @@ export class CustomerPatch extends OpenAPIRoute {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
     if (data.body.is_active !== undefined && c.get("auth").user.role !== "admin") throw forbidden();
     return c.json({ data: await patchCustomer(c.env.DB, c.get("auth").user.id, data.params.id, data.body) });
+  }
+}
+export class CustomerDelete extends OpenAPIRoute {
+  schema = { tags: ["Customers"], summary: "İşlem geçmişi olmayan müşteriyi kalıcı sil (admin)", request: {
+    params: customerParams, headers: z.object({ "idempotency-key": z.uuid() }),
+  }, responses: { "200": { description: "Silindi veya aynı silme işlemi tekrarlandı", ...json(z.object({ success: z.literal(true), id: z.uuid() })) },
+    "409": { description: "İlişkili geçmiş kayıt veya işlem anahtarı çakışması" } } };
+  async handle(c: AppContext) {
+    const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
+    return c.json(await deleteCustomer(c.env.DB, c.get("auth"), data.params.id, data.headers["idempotency-key"]));
   }
 }
