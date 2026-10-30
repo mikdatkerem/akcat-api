@@ -1,3 +1,5 @@
+import type { AuthSession } from "../types";
+import { authorizedBatch } from "../security/authorizedBatch";
 import { AuthError } from "../auth/errors";
 import { tokenHash } from "../security/tokens";
 import type { CreateSaleInput, SaleQuery } from "./schemas";
@@ -70,7 +72,8 @@ export async function listSales(db: D1Database, query: SaleQuery) {
   } };
 }
 
-export async function createSale(db: D1Database, actor: string, key: string, input: CreateSaleInput) {
+export async function createSale(db: D1Database, auth: AuthSession, key: string, input: CreateSaleInput) {
+  const actor = auth.user.id;
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const operation = `sale:create:${tokenHash(actor + ":" + key)}`;
@@ -80,13 +83,14 @@ export async function createSale(db: D1Database, actor: string, key: string, inp
   const session = db.withSession("first-primary");
   // Pricing, active checks and every write execute inside ONE SQLite transaction. No pre-read price window.
   // Each line is bounded BEFORE multiplication; 50 safe lines sum below SQLite's signed 64-bit maximum.
-  const results = await session.batch([
+  const results = await authorizedBatch(session, auth, [
     session.prepare(`WITH requested AS (
       SELECT json_extract(value, '$.product_id') AS product_id, json_extract(value, '$.quantity') AS quantity,
-        json_extract(value, '$.unit_price_kurus') AS unit_price_kurus FROM json_each(?)
+        json_extract(value, '$.unit_price_kurus') AS unit_price_kurus, json_extract(value, '$.expected_list_price_kurus') AS expected_price FROM json_each(?)
     ), priced AS (
       SELECT CASE WHEN p.is_active = 1 AND typeof(p.current_price_kurus) = 'integer' AND p.current_price_kurus >= 0
         AND p.current_price_kurus <= ${MAX}
+        AND (r.unit_price_kurus IS NOT NULL OR p.current_price_kurus = r.expected_price)
         AND typeof(coalesce(r.unit_price_kurus, p.current_price_kurus)) = 'integer'
         AND coalesce(r.unit_price_kurus, p.current_price_kurus) > 0
         AND coalesce(r.unit_price_kurus, p.current_price_kurus) <= ${MAX} / r.quantity
@@ -112,8 +116,14 @@ export async function createSale(db: D1Database, actor: string, key: string, inp
       SELECT ?, created_by, 'sale.created', 'sale', id, ?, ? FROM sales WHERE id = ?`)
       .bind(operation, JSON.stringify({ fields: ["customer_id", "items", "payment"], request_hash: fingerprint }), now, id),
     session.prepare("SELECT entity_id, metadata FROM audit_logs WHERE id = ? AND actor_user_id = ?").bind(operation, actor),
+    session.prepare(`SELECT p.id AS product_id, p.name, json_extract(j.value, '$.expected_list_price_kurus') AS expected_list_price_kurus, p.current_price_kurus
+      FROM json_each(?) j JOIN products p ON p.id=json_extract(j.value, '$.product_id')
+      WHERE p.is_active=1 AND json_extract(j.value, '$.unit_price_kurus') IS NULL
+        AND p.current_price_kurus <> json_extract(j.value, '$.expected_list_price_kurus')`).bind(requested),
   ]);
   const audit = results[4]?.results[0] as { entity_id: string; metadata: string } | undefined;
+  if (!audit && items.some(item => item.unit_price_kurus === undefined && item.expected_list_price_kurus === undefined)) throw new AuthError(428, "PRICE_CONFIRMATION_REQUIRED", "Liste fiyatlarını yenileyip satışı tekrar onaylayın.");
+  if (!audit && results[5]!.results.length) throw new AuthError(409, "PRICE_CHANGED", "Ürün fiyatı değişti. Yeni tutarı kontrol edip tekrar onaylayın.", { products: results[5]!.results });
   if (!audit) throw new AuthError(422, "SALE_NOT_ALLOWED", "Satış kaydedilemedi. Müşteriyi, aktif ürünleri, güncel fiyatları ve ödeme tutarını kontrol edin.");
   if (JSON.parse(audit.metadata).request_hash !== fingerprint) throw new AuthError(409, "IDEMPOTENCY_CONFLICT", "Bu işlem anahtarı farklı satış bilgileriyle kullanılmış. Satış geçmişini kontrol edin.");
   return { sale: await getSale(db, audit.entity_id), created: results[0]?.meta.changes === 1 };

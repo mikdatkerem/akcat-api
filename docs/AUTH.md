@@ -75,3 +75,7 @@ Kaynaklar: [Workers rate-limit kapsamı](https://developers.cloudflare.com/worke
 ## Kontrol kapsamı
 
 `npm.cmd run typecheck`, `npm.cmd test`, `npm.cmd run build`. Test harness’i yalnızca `tests/wrangler.jsonc` tarafından yüklenir; üretim entrypoint’i test rotalarını içermez. Test DB kimliği gerçek `akcat-db` kimliğinden farklıdır; `--local` ve OS geçici persistence yolu zorunludur. Rastgele test anahtarı ve kullanıcı bilgileri her çalıştırmada yeniden üretilir. Mevcut yerel/canlı veritabanına test verisi yazılmaz. API Secure-cookie testi yerel Worker’a mantıksal HTTPS isteği geçirerek HTTP başlıklarını doğrular; gerçek TLS/tarayıcı testi değildir. Web’in ayrı tarayıcı entegrasyon kontrolleri ve geçici test ortamı `akcat-app/tests/` içinde belgelenmiştir.
+
+## Atomik yazma yetkisi (30.10.2026)
+
+Kritik yazmalarda kullanıcı/rol/aktif oturum aynı D1 batch’i başında yeniden denetlenir; yetki iptali önce commit etmişse işlem 403 ile reddedilir. Tamamlanmış önceki yazmalar geriye dönük iptal edilmez. Cookie, CSRF, Origin, scrypt ve rate-limit kuralları korunur. Ayrıntı ve kontrollü yayın: [RELIABILITY.md](RELIABILITY.md).

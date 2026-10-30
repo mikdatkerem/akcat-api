@@ -1,6 +1,7 @@
+import { migrationSql } from './migration-source.mjs'
+import { legacyFinance } from './legacy-fixture.mjs'
 import { before, after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { reportEnvironment } from './report-environment.mjs'
 
@@ -33,25 +34,26 @@ before(async () => {
 }, { timeout: 60000 })
 after(async () => { await env?.close() })
 
-test('audit: 0001 legacy database accepts real sales before additive 0002 upgrade', async () => {
-  customer = await saved(await env.write(employee, '/api/v1/customers', { name: 'Denetim müşterisi', address: 'Yalnızca izole test' }))
-  product = await saved(await env.write(admin, '/api/v1/products', { name: 'Orijinal snapshot', current_price_kurus: 50000 }))
-  legacy = await saved(await env.write(employee, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: 10000, method: 'cash' } }))
+test('audit: 0001 historical financial fixture survives upgrade to the current schema', async () => {
+  const fixture = await legacyFinance(env, employee, 10000)
+  customer = fixture.customer; product = fixture.product; legacy = fixture.sale
   snapshot = await originalRows()
   assert.equal((await env.sql("SELECT count(*) AS n FROM sqlite_master WHERE name='financial_adjustments'"))[0].n, 0)
 })
 test('audit: 0002 upgrade preserves every original sale, item, receipt and audit byte-for-byte', async () => {
-  const sql = await readFile(new URL('../migrations/0002_financial_adjustments.sql', import.meta.url), 'utf8')
+  const sql = (await migrationSql()).slice((await migrationSql(['0001_initial_schema.sql'])).length)
   const response = await env.request('/__test/schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql }) })
-  assert.equal(response.status, 200); assert.deepEqual(await originalRows(), snapshot)
+  assert.equal(response.status, 200); assert.deepEqual(await originalRows(), { ...snapshot, sale_items: snapshot.sale_items.map(row => ({ ...row, list_unit_price_kurus: null })) })
   assert.deepEqual(await env.sql('PRAGMA foreign_key_check'), [])
+  assert.equal((await env.sql('SELECT version FROM products WHERE id=?', [product.id]))[0].version, 1)
+  assert.equal((await env.sql('SELECT version FROM customers WHERE id=?', [customer.id]))[0].version, 1)
   await sameDebt(40000)
   for (const path of ['sales', 'sales/' + legacy.id, 'payments', 'financial-adjustments', 'reports/payments', 'reports/sales', 'reports/employees']) await read(path)
 })
 test('audit: raw duplicate migration fails safely without overwriting existing data', async () => {
-  const sql = await readFile(new URL('../migrations/0002_financial_adjustments.sql', import.meta.url), 'utf8')
+  const sql = (await migrationSql()).slice((await migrationSql(['0001_initial_schema.sql'])).length)
   const response = await env.request('/__test/schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql }) })
-  assert.equal(response.status, 500); assert.deepEqual(await originalRows(), snapshot)
+  assert.equal(response.status, 500); assert.deepEqual(await originalRows(), { ...snapshot, sale_items: snapshot.sale_items.map(row => ({ ...row, list_unit_price_kurus: null })) })
   assert.deepEqual(await env.sql('PRAGMA foreign_key_check'), []); await sameDebt(40000)
 })
 test('audit: complete finance chain yields identical debt on account, ledger, debt list and reports at every step', async () => {
@@ -64,7 +66,7 @@ test('audit: complete finance chain yields identical debt on account, ledger, de
   assert.equal(report.payments.payments_total_kurus, 0); assert.equal(report.adjustments.record_reversal_kurus, 10000)
   assert.equal(report.adjustments.refund_bank_kurus, 25000); assert.equal(report.sales.cancelled_total_kurus, 50000)
   const original = (await env.sql('SELECT * FROM payments WHERE id=?', [legacy.payments[0].id]))[0]
-  assert.deepEqual(original, snapshot.payments[0]); assert.deepEqual(await env.sql('SELECT * FROM sale_items WHERE sale_id=? ORDER BY id', [legacy.id]), snapshot.sale_items)
+  assert.deepEqual(original, snapshot.payments[0]); assert.deepEqual(await env.sql('SELECT * FROM sale_items WHERE sale_id=? ORDER BY id', [legacy.id]), snapshot.sale_items.map(row => ({ ...row, list_unit_price_kurus: null })))
 })
 test('audit: foreign keys and unique original-payment/request/refund constraints remain enforced', async () => {
   const invalid = await env.request('/__test/sql', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -78,7 +80,7 @@ test('audit: foreign keys and unique original-payment/request/refund constraints
   assert.deepEqual(await env.sql('PRAGMA foreign_key_check'), [])
 })
 test('audit: four concurrent collections cannot overpay; snapshot and cross-screen balance stay consistent', async () => {
-  const sale = await saved(await env.write(employee, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: 0, method: null } }))
+  const sale = await saved(await env.write(employee, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, expected_list_price_kurus: 50000, quantity: 1 }], payment: { amount_kurus: 0, method: null } }))
   const responses = await Promise.all(Array.from({ length: 4 }, () => env.write(employee, '/api/v1/payments', { customer_id: customer.id, sale_id: sale.id, amount_kurus: 15000, method: 'card' })))
   assert.deepEqual(responses.map(row => row.status).sort(), [201, 201, 201, 422]); await sameDebt(5000)
   assert.equal((await env.write(admin, '/api/v1/products/' + product.id, { name: 'Yeni katalog', current_price_kurus: 1999 }, 'PATCH')).status, 200)

@@ -31,17 +31,17 @@ export class ProductCreate extends OpenAPIRoute {
   }, responses: { "201": single, "200": { ...single, description: "Aynı oluşturma işleminin tekrar yanıtı" } } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    const result = await createProduct(c.env.DB, c.get("auth").user.id, data.headers["idempotency-key"], data.body);
+    const result = await createProduct(c.env.DB, c.get("auth"), data.headers["idempotency-key"], data.body);
     return c.json({ data: result.product }, result.created ? 201 : 200);
   }
 }
 export class ProductPatch extends OpenAPIRoute {
   schema = { tags: ["Products"], summary: "Ürün düzenle, fiyat ve aktiflik değiştir (admin)", request: {
-    params: productParams, body: { required: true, ...json(patchProductSchema) },
+    params: productParams, headers: z.object({ "idempotency-key": z.uuid() }), body: { required: true, ...json(patchProductSchema) },
   }, responses: { "200": single } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    return c.json({ data: await patchProduct(c.env.DB, c.get("auth").user.id, data.params.id, data.body) });
+    return c.json({ data: await patchProduct(c.env.DB, c.get("auth"), data.params.id, data.headers["idempotency-key"], data.body) });
   }
 }
 

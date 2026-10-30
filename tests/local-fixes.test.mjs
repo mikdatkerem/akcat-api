@@ -1,7 +1,8 @@
+import { migrationSql } from './migration-source.mjs'
+import { legacyFinance } from './legacy-fixture.mjs'
 import { before, after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
 import { reportEnvironment } from './report-environment.mjs'
 
 let env, admin, employee, customer, emptyCustomer, sale, original
@@ -12,10 +13,10 @@ const body = () => ({ customer_id: customer.id, sale_id: sale.id, amount_kurus: 
 before(async () => {
   env = await reportEnvironment({ migrations: ['0001_initial_schema.sql'] })
   admin = await env.fixture('admin'); employee = await env.fixture()
-  customer = await saved(await env.write(employee, '/api/v1/customers', { name: 'İzole yerel düzeltme', address: 'Yalnızca izole test' }))
-  emptyCustomer = await saved(await env.write(employee, '/api/v1/customers', { name: 'İzole boş geçmiş', address: 'Yalnızca izole test' }))
-  const product = await saved(await env.write(admin, '/api/v1/products', { name: 'İzole ürün', current_price_kurus: 50000 }))
-  sale = await saved(await env.write(employee, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: 0, method: null } }))
+  const fixture = await legacyFinance(env, employee)
+  customer = fixture.customer; sale = fixture.sale
+  emptyCustomer = { id: randomUUID() }
+  await env.sql('INSERT INTO customers(id,name,address,created_at,updated_at) VALUES(?,?,?,?,?)', [emptyCustomer.id, 'İzole boş geçmiş', 'Yalnızca izole test', new Date().toISOString(), new Date().toISOString()])
   original = await rows()
 }, { timeout: 60000 })
 after(async () => { await env?.close() })
@@ -32,8 +33,8 @@ test('local fixes: missing 0002 yields safe schema error, never false empty/succ
 })
 
 test('local fixes: additive 0002 preserves data and returns real zero-row histories', async () => {
-  const response = await env.request('/__test/schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: await readFile(new URL('../migrations/0002_financial_adjustments.sql', import.meta.url), 'utf8') }) })
-  assert.equal(response.status, 200); assert.deepEqual(await rows(), original)
+  const response = await env.request('/__test/schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: (await migrationSql()).slice((await migrationSql(['0001_initial_schema.sql'])).length) }) })
+  assert.equal(response.status, 200); assert.deepEqual(await rows(), { ...original, sale_items: original.sale_items.map(row => ({ ...row, list_unit_price_kurus: null })) })
   for (const path of ['/api/v1/sales?customer_id=' + emptyCustomer.id, '/api/v1/payments', '/api/v1/customers/' + emptyCustomer.id + '/ledger', '/api/v1/customers/' + emptyCustomer.id + '/receivables', '/api/v1/reports/payments']) {
     const result = await env.read(employee, path); assert.equal(result.status, 200)
     const page = await result.json(); assert.deepEqual(page.data, []); assert.equal(page.pagination.total, 0); assert.equal(page.pagination.totalPages, 0)

@@ -1,3 +1,5 @@
+import type { AuthSession } from "../types";
+import { authorizedBatch } from "../security/authorizedBatch";
 import { AuthError, forbidden } from "../auth/errors";
 import { tokenHash } from "../security/tokens";
 import type { PublicUser } from "../types";
@@ -39,12 +41,13 @@ export function cancelUpdate(session: D1DatabaseSession, operation: string, atte
     SELECT entity_id FROM audit_logs WHERE id = ? AND json_extract(metadata, '$.attempt') = ?)`)
     .bind(now, operation, attempt);
 }
-export async function cancelSale(db: D1Database, actor: PublicUser, id: string, key: string, reason: string) {
+export async function cancelSale(db: D1Database, auth: AuthSession, id: string, key: string, reason: string) {
+  const actor = auth.user;
   const now = new Date().toISOString(), earliest = new Date(Date.parse(now) - 300000).toISOString();
   const operation = operationId(actor.id, key, "sale:cancel"), attempt = crypto.randomUUID();
   const fingerprint = tokenHash(JSON.stringify([id, reason]));
   const session = db.withSession("first-primary");
-  const result = await session.batch([
+  const result = await authorizedBatch(session, auth, [
     cancellationAudit(session, operation, actor.id, id, reason, now, fingerprint, attempt,
       `? = 'admin' OR (s.created_by = ? AND s.created_at >= ? AND s.created_at <= ?)`, [actor.role, actor.id, earliest, now]),
     cancelUpdate(session, operation, attempt, now),
@@ -97,11 +100,12 @@ export async function listCorrections(db: D1Database, actor: PublicUser, query: 
   ]);
   return { data: results[1]?.results.map(row => present(row)), pagination: pageInfo(query, Number(results[0]?.results[0]?.total)) };
 }
-export async function createCorrection(db: D1Database, actor: PublicUser, key: string, input: CreateCorrection) {
+export async function createCorrection(db: D1Database, auth: AuthSession, key: string, input: CreateCorrection) {
+  const actor = auth.user;
   const id = crypto.randomUUID(), now = new Date().toISOString(), operation = operationId(actor.id, key, "correction:create");
   const fingerprint = tokenHash(JSON.stringify([input.target_type, input.target_id, input.correction_type, input.reason, input.requested_change]));
   const session = db.withSession("first-primary");
-  const results = await session.batch([
+  const results = await authorizedBatch(session, auth, [
     session.prepare(`INSERT INTO correction_requests(id, target_type, target_id, requested_by, reason, proposed_change, status, created_at)
       SELECT ?, ?, ?, ?, ?, ?, 'pending', ? WHERE
         ((? = 'sale' AND EXISTS(SELECT 1 FROM sales WHERE id = ?)) OR (? = 'payment' AND EXISTS(SELECT 1 FROM payments WHERE id = ?)))
@@ -118,12 +122,13 @@ export async function createCorrection(db: D1Database, actor: PublicUser, key: s
   if (!verify(audit, fingerprint) || !audit) throw new AuthError(404, "CORRECTION_TARGET_NOT_FOUND", "Düzeltilecek kayıt bulunamadı.");
   return { data: await getCorrection(db, actor, audit.entity_id), created: results[0]?.meta.changes === 1 };
 }
-export async function reviewCorrection(db: D1Database, actor: PublicUser, id: string, key: string, reason: string, approve: boolean, body?: ApprovalBody) {
+export async function reviewCorrection(db: D1Database, auth: AuthSession, id: string, key: string, reason: string, approve: boolean, body?: ApprovalBody) {
+  const actor = auth.user;
   if (actor.role !== "admin") throw forbidden();
   if (approve) {
     const current = await getCorrection(db, actor, id);
     if (["payment_reversal", "payment_refund"].includes(current.correction_type)) {
-      await approveFinancial(db, actor, id, key, body ?? { reason });
+      await approveFinancial(db, auth, id, key, body ?? { reason });
       return getCorrection(db, actor, id);
     }
     if (body && Object.keys(body).some(field => field !== "reason")) throw new AuthError(400, "INVALID_CORRECTION_INPUT", "Bu talep için finansal onay alanları geçersiz.");
@@ -155,7 +160,7 @@ export async function reviewCorrection(db: D1Database, actor: PublicUser, id: st
     WHERE id = ? AND EXISTS(SELECT 1 FROM audit_logs WHERE id = ? AND json_extract(metadata, '$.attempt') = ?)`)
     .bind(action, actor.id, now, id, operation, attempt));
   statements.push(session.prepare("SELECT entity_id, metadata FROM audit_logs WHERE id = ?").bind(operation));
-  const results = await session.batch(statements);
+  const results = await authorizedBatch(session, auth, statements);
   if (!verify(results.at(-1)?.results[0] as Audit | undefined, fingerprint)) {
     const current = await getCorrection(db, actor, id);
     if (current.status !== "pending") throw unavailable();

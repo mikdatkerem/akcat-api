@@ -15,7 +15,7 @@ export class PaymentCreate extends OpenAPIRoute {
     responses: { "201": receipt, "200": { ...receipt, description: "Aynı işlemin tekrar yanıtı" } } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    const result = await createPayment(c.env.DB, c.get("auth").user.id, data.headers["idempotency-key"], data.body);
+    const result = await createPayment(c.env.DB, c.get("auth"), data.headers["idempotency-key"], data.body);
     return c.json({ data: result.payment }, result.created ? 201 : 200);
   }
 }

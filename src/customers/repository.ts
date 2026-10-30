@@ -1,11 +1,13 @@
+import { patchRecord } from "../database/patchRecord";
+import { authorizedBatch } from "../security/authorizedBatch";
 import { tokenHash } from "../security/tokens";
 import { AuthError, forbidden } from "../auth/errors";
 import type { AuthSession } from "../types";
 import type { CreateCustomerInput, PatchCustomerInput, CustomerQuery } from "./schemas";
 
 type Row = { id: string; name: string; phone: string | null; address: string; delivery_notes: string | null;
-  is_active: number; created_at: string; updated_at: string };
-const columns = "id, name, phone, address, delivery_notes, is_active, created_at, updated_at";
+  is_active: number; created_at: string; updated_at: string; version: number };
+const columns = "id, name, phone, address, delivery_notes, is_active, created_at, updated_at, version";
 const present = (row: Row) => ({ ...row, is_active: row.is_active === 1 });
 export const missingCustomer = () => new AuthError(404, "CUSTOMER_NOT_FOUND", "Müşteri bulunamadı.");
 
@@ -44,7 +46,8 @@ export async function listCustomers(db: D1Database, query: CustomerQuery) {
   } };
 }
 
-export async function createCustomer(db: D1Database, actor: string, key: string, input: CreateCustomerInput) {
+export async function createCustomer(db: D1Database, auth: AuthSession, key: string, input: CreateCustomerInput) {
+  const actor = auth.user.id;
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const operation = `customer:create:${tokenHash(actor + ":" + key)}`;
@@ -52,8 +55,8 @@ export async function createCustomer(db: D1Database, actor: string, key: string,
   // Audit metadata keeps field names and an idempotency digest, never contact/address/note values.
   const metadata = JSON.stringify({ fields: ["name", "phone", "address", "delivery_notes"], request_hash: fingerprint });
   const session = db.withSession("first-primary");
-  const results = await session.batch([
-    session.prepare(`INSERT INTO customers (${columns}) SELECT ?, ?, ?, ?, ?, 1, ?, ?
+  const results = await authorizedBatch(session, auth, [
+    session.prepare(`INSERT INTO customers (${columns.replace(", version", "")}) SELECT ?, ?, ?, ?, ?, 1, ?, ?
       WHERE NOT EXISTS (SELECT 1 FROM audit_logs WHERE id = ?)`)
       .bind(id, input.name, input.phone, input.address, input.delivery_notes, now, now, operation),
     session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
@@ -71,22 +74,11 @@ export async function createCustomer(db: D1Database, actor: string, key: string,
   return { customer: present(customer), created: results[0]?.meta.changes === 1 };
 }
 
-export async function patchCustomer(db: D1Database, actor: string, id: string, input: PatchCustomerInput) {
-  const entries = Object.entries(input).filter(([, value]) => value !== undefined);
-  const allowed = new Set(["name", "phone", "address", "delivery_notes", "is_active"]);
-  if (entries.some(([field]) => !allowed.has(field))) throw new AuthError(400, "INVALID_INPUT", "Geçersiz müşteri alanı.");
-  const now = new Date().toISOString();
-  const session = db.withSession("first-primary");
-  const results = await session.batch([
-    session.prepare(`UPDATE customers SET ${entries.map(([field]) => `${field} = ?`).join(", ")}, updated_at = ? WHERE id = ? RETURNING ${columns}`)
-      .bind(...entries.map(([, value]) => typeof value === "boolean" ? Number(value) : value), now, id),
-    session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
-      SELECT ?, ?, 'customer.updated', 'customer', id, ?, ? FROM customers WHERE id = ? AND updated_at = ?`)
-      .bind(crypto.randomUUID(), actor, JSON.stringify({ fields: entries.map(([field]) => field) }), now, id, now),
-  ]);
-  const row = results[0]?.results[0] as Row | undefined;
-  if (!row) throw missingCustomer();
-  return present(row);
+export async function patchCustomer(db: D1Database, auth: AuthSession, id: string, key: string, input: PatchCustomerInput) {
+  const { expected_version, ...fields } = input;
+  if (expected_version === undefined) throw new AuthError(428, "VERSION_REQUIRED", "Güncel kayıt sürümü gerekli.");
+  const entries = Object.entries(fields).filter(([, value]) => value !== undefined) as [string, string | number | boolean | null][];
+  return present(await patchRecord<Row>(db, auth, "customers", columns, id, key, expected_version, entries));
 }
 
 // Debt/ledger are derived from sales/payments; corrections retain those same targets.
@@ -106,7 +98,7 @@ export async function deleteCustomer(db: D1Database, auth: AuthSession, id: stri
   const attempt = crypto.randomUUID(), now = new Date().toISOString(), session = db.withSession("first-primary");
   let rows: D1Result<Record<string, unknown>>[];
   try {
-    rows = await session.batch([
+    rows = await authorizedBatch(session, auth, [
       session.prepare(`SELECT ${deleteActorGate} AS allowed`).bind(auth.user.id, auth.id, now),
       // Keep existing audits; do not copy names, addresses, phones or notes into deletion metadata.
       session.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,entity_type,entity_id,metadata,created_at)

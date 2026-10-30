@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 export class AuthError extends Error {
   readonly status: ContentfulStatusCode;
   readonly code: string;
-  constructor(status: ContentfulStatusCode, code: string, message: string) {
+  constructor(status: ContentfulStatusCode, code: string, message: string, readonly details?: unknown) {
     super(message);
     this.status = status;
     this.code = code;

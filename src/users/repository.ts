@@ -1,3 +1,4 @@
+import { authorizedBatch } from "../security/authorizedBatch";
 import { AuthError, forbidden } from "../auth/errors";
 import type { AuthSession, Role } from "../types";
 import { hashPassword, verifyPassword } from "../security/password";
@@ -38,7 +39,7 @@ export async function createUser(db: D1Database, auth: AuthSession, key: string,
   const operation = `user:create:${tokenHash(auth.user.id + ":" + key)}`, session = db.withSession("first-primary");
   // No fast digest of a password: it would permit offline guessing without scrypt.
   const metadata = JSON.stringify({ username: input.username, role: input.role, attempt });
-  const rows = await session.batch<Record<string, unknown>>([
+  const rows = await authorizedBatch<Record<string, unknown>>(session, auth, [
     allowedStatement(session, auth, now),
     session.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,entity_type,entity_id,metadata,created_at)
       SELECT ?,?,'user.created','user',?,?,? WHERE ${actorGate}
@@ -62,7 +63,7 @@ export async function patchUser(db: D1Database, auth: AuthSession, id: string, k
   const now = new Date().toISOString(), attempt = crypto.randomUUID(), session = db.withSession("first-primary");
   const operation = `user:update:${tokenHash(auth.user.id + ":" + key)}`;
   const fingerprint = tokenHash(JSON.stringify([id, input.username ?? null, input.role ?? null, input.is_active ?? null]));
-  const rows = await session.batch<Record<string, unknown>>([
+  const rows = await authorizedBatch<Record<string, unknown>>(session, auth, [
     allowedStatement(session, auth, now),
     session.prepare(`WITH candidate AS (SELECT t.*,coalesce(?,t.username) AS next_username,coalesce(?,t.role) AS next_role,
       coalesce(?,t.is_active) AS next_active FROM users t WHERE id=?)
@@ -104,7 +105,7 @@ export async function patchUser(db: D1Database, auth: AuthSession, id: string, k
 export async function resetPassword(db: D1Database, auth: AuthSession, id: string, key: string, password: string) {
   const hash = await hashPassword(password), now = new Date().toISOString(), attempt = crypto.randomUUID(), session = db.withSession("first-primary");
   const operation = `user:reset-password:${tokenHash(auth.user.id + ":" + key)}`;
-  const rows = await session.batch<Record<string, unknown>>([
+  const rows = await authorizedBatch<Record<string, unknown>>(session, auth, [
     allowedStatement(session, auth, now),
     session.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,entity_type,entity_id,metadata,created_at)
       SELECT ?,?,'user.password_reset','user',id,?,? FROM users WHERE id=? AND ${actorGate}
@@ -139,7 +140,7 @@ export async function deleteUser(db: D1Database, auth: AuthSession, id: string, 
   let rows: D1Result<Record<string, unknown>>[];
   try {
     // One transaction protects the actor, last admin, references, sessions and audit.
-    rows = await session.batch([
+    rows = await authorizedBatch(session, auth, [
       allowedStatement(session, auth, now),
       session.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,entity_type,entity_id,metadata,created_at)
         SELECT ?,?,'user.deleted','user',u.id,json_object('attempt',?,'username',u.username,'role',u.role,'is_active',u.is_active),?

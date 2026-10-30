@@ -1,10 +1,12 @@
+import { patchRecord } from "../database/patchRecord";
+import { authorizedBatch } from "../security/authorizedBatch";
 import { tokenHash } from "../security/tokens";
 import { AuthError, forbidden } from "../auth/errors";
 import type { AuthSession } from "../types";
 import type { CreateProductInput, PatchProductInput, ProductQuery } from "./schemas";
 
-type Row = { id: string; name: string; current_price_kurus: number; is_active: number; created_at: string; updated_at: string };
-const columns = "id, name, current_price_kurus, is_active, created_at, updated_at";
+type Row = { id: string; name: string; current_price_kurus: number; is_active: number; created_at: string; updated_at: string; version: number };
+const columns = "id, name, current_price_kurus, is_active, created_at, updated_at, version";
 const present = (row: Row) => ({ ...row, is_active: row.is_active === 1 });
 const missing = () => new AuthError(404, "PRODUCT_NOT_FOUND", "Ürün bulunamadı.");
 
@@ -37,7 +39,8 @@ export async function listProducts(db: D1Database, query: ProductQuery) {
     page: query.page, pageSize: query.pageSize, total, totalPages: Math.ceil(total / query.pageSize),
   } };
 }
-export async function createProduct(db: D1Database, actor: string, key: string, input: CreateProductInput) {
+export async function createProduct(db: D1Database, auth: AuthSession, key: string, input: CreateProductInput) {
+  const actor = auth.user.id;
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const operation = `product:create:${tokenHash(actor + ":" + key)}`;
@@ -45,8 +48,8 @@ export async function createProduct(db: D1Database, actor: string, key: string, 
   const metadata = JSON.stringify({ fields: ["name", "current_price_kurus", "is_active"], request_hash: fingerprint });
   const session = db.withSession("first-primary");
   // The existing audit primary key serializes retries. Product + audit commit or roll back together.
-  const results = await session.batch([
-    session.prepare(`INSERT INTO products (${columns}) SELECT ?, ?, ?, ?, ?, ?
+  const results = await authorizedBatch(session, auth, [
+    session.prepare(`INSERT INTO products (${columns.replace(", version", "")}) SELECT ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (SELECT 1 FROM audit_logs WHERE id = ?)`)
       .bind(id, input.name, input.current_price_kurus, Number(input.is_active), now, now, operation),
     session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
@@ -63,23 +66,11 @@ export async function createProduct(db: D1Database, actor: string, key: string, 
   if (!product) throw new AuthError(409, "PRODUCT_DELETED", "Bu işlemle oluşturulan ürün daha sonra silinmiş. Ürün listesini yenileyin.");
   return { product: present(product), created: results[0]?.meta.changes === 1 };
 }
-export async function patchProduct(db: D1Database, actor: string, id: string, input: PatchProductInput) {
-  const entries = Object.entries(input).filter(([, value]) => value !== undefined);
-  const allowed = new Set(["name", "current_price_kurus", "is_active"]);
-  if (!entries.length || entries.some(([field]) => !allowed.has(field))) throw new AuthError(400, "INVALID_PRODUCT_INPUT", "Geçersiz ürün alanı.");
-  const now = new Date().toISOString();
-  const session = db.withSession("first-primary");
-  // Only current catalog values change. Historical sale_items snapshots are never updated here.
-  const results = await session.batch([
-    session.prepare(`UPDATE products SET ${entries.map(([field]) => `${field} = ?`).join(", ")}, updated_at = ? WHERE id = ? RETURNING ${columns}`)
-      .bind(...entries.map(([, value]) => typeof value === "boolean" ? Number(value) : value), now, id),
-    session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
-      SELECT ?, ?, 'product.updated', 'product', id, ?, ? FROM products WHERE id = ? AND updated_at = ?`)
-      .bind(crypto.randomUUID(), actor, JSON.stringify({ fields: entries.map(([field]) => field) }), now, id, now),
-  ]);
-  const row = results[0]?.results[0] as Row | undefined;
-  if (!row) throw missing();
-  return present(row);
+export async function patchProduct(db: D1Database, auth: AuthSession, id: string, key: string, input: PatchProductInput) {
+  const { expected_version, ...fields } = input;
+  if (expected_version === undefined) throw new AuthError(428, "VERSION_REQUIRED", "Güncel kayıt sürümü gerekli.");
+  const entries = Object.entries(fields).filter(([, value]) => value !== undefined) as [string, string | number | boolean | null][];
+  return present(await patchRecord<Row>(db, auth, "products", columns, id, key, expected_version, entries));
 }
 
 const inUse = () => new AuthError(409, "PRODUCT_IN_USE", "Bu ürün geçmiş satış kayıtlarında kullanıldığı için kalıcı olarak silinemez. Ürünü pasife alarak yeni satışlarda kullanılmasını engelleyebilirsiniz.");
@@ -94,7 +85,7 @@ export async function deleteProduct(db: D1Database, auth: AuthSession, id: strin
   try {
     // Reference check, live admin/session check, audit snapshot and deletion share one transaction.
     // No status filter: cancelled sales also protect their product references.
-    results = await session.batch([
+    results = await authorizedBatch(session, auth, [
       session.prepare(`SELECT ${deleteActorGate} AS allowed`).bind(auth.user.id, auth.id, now),
       session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
         SELECT ?, ?, 'product.deleted', 'product', p.id,

@@ -1,16 +1,16 @@
 # Müşteri yönetimi API sözleşmesi
 
-Mevcut `customers` ve `audit_logs` tabloları kullanılır. Yeni migration veya tablo yoktur. Liste, detay, oluşturma ve temel düzenleme için `admin` / `employee`; `is_active` alanını PATCH ile göndermek ve geçmişi olmayan müşteriyi kalıcı silmek için yalnızca `admin` gerekir (aynı aktiflik değerini göndermek de employee için 403). Yeni müşteriler aktif oluşturulur. Yetki mevcut authentication/role middleware’iyle sunucuda doğrulanır.
+Mevcut `customers` ve `audit_logs` tabloları kullanılır. `0004_record_versions.sql` mevcut kayıtlara `version=1` ile sürüm alanı ekler; yeni tablo yoktur. Liste, detay, oluşturma ve temel düzenleme için `admin` / `employee`; `is_active` alanını PATCH ile göndermek ve geçmişi olmayan müşteriyi kalıcı silmek için yalnızca `admin` gerekir (aynı aktiflik değerini göndermek de employee için 403). Yeni müşteriler aktif oluşturulur. Yetki mevcut authentication/role middleware’iyle sunucuda doğrulanır.
 
 | Metot / yol | İstek | Yanıt |
 |---|---|---|
 | `GET /api/v1/customers` | `q`, `status=all/active/inactive`, `page`, `pageSize` | `{data:Customer[],pagination:{page,pageSize,total,totalPages}}` |
 | `POST /api/v1/customers` | JSON müşteri bilgileri ve UUID `Idempotency-Key` | `201 {data:Customer}`; aynı işlem tekrarı `200` |
 | `GET /api/v1/customers/:id` | UUID müşteri ID | `200 {data:Customer}` |
-| `PATCH /api/v1/customers/:id` | En az bir izinli JSON alanı | `200 {data:Customer}` |
+| `PATCH /api/v1/customers/:id` | En az bir izinli JSON alanı + `expected_version` + UUID `Idempotency-Key` | `200 {data:Customer}` |
 | `DELETE /api/v1/customers/:id` | UUID hedef + UUID `Idempotency-Key`; admin; gövdesiz | `200 {success:true,id}`; ilişkili geçmiş için `409 CUSTOMER_IN_USE` |
 
-`Customer` alanları: `id`, `name`, `phone`, `address`, `delivery_notes`, **boolean** `is_active`, UTC ISO `created_at` / `updated_at`. POST/PATCH body alanları aynı snake_case adlarını kullanır. `id`, tarihler veya bilinmeyen alanlar gönderilemez. `name`: zorunlu, kırpılmış 1–160 karakter; `address`: zorunlu, 1–1000; `phone`: isteğe bağlı/null, en fazla 64 karakter; `delivery_notes`: isteğe bağlı/null, en fazla 2000. PATCH’te gönderilmeyen alanlar korunur; boş/null telefon veya not alanı temizler. Kontrol karakterleri reddedilir; adres/notta normal satır sonları ve tab korunur. İstek gövdesi en fazla 16 KiB.
+`Customer` alanları: `id`, `name`, `phone`, `address`, `delivery_notes`, **boolean** `is_active`, UTC ISO `created_at` / `updated_at`, pozitif tam sayı `version`. POST/PATCH body alanları aynı snake_case adlarını kullanır. `id`, tarihler veya bilinmeyen alanlar gönderilemez. `name`: zorunlu, kırpılmış 1–160 karakter; `address`: zorunlu, 1–1000; `phone`: isteğe bağlı/null, en fazla 64 karakter; `delivery_notes`: isteğe bağlı/null, en fazla 2000. PATCH’te gönderilmeyen alanlar korunur; boş/null telefon veya not alanı temizler. Kontrol karakterleri reddedilir; adres/notta normal satır sonları ve tab korunur. İstek gövdesi en fazla 16 KiB.
 
 Telefon doğrulaması ülke kodu, uluslararası `00`, boşluk, nokta, parantez, tire ve isteğe bağlı `x`, `ext`, `dahili` (1–6 rakam) kabul eder. Ana numara 7–15 rakam olmalıdır; yalnızca Türkiye cep telefonu biçimi dayatılmaz. Kopyalanan uyumlu Unicode karakterleri/NBSP ve tireler normalleştirilir. Bir telefon rehberi/numara sahipliği doğrulaması yapılmaz.
 
@@ -26,9 +26,9 @@ Ad araması Türkçe büyük/küçük harf dönüşümlerini destekler; telefon 
 
 İstemci yeni form açıldığında rastgele UUID işlem anahtarı üretir; aynı formdaki yeniden denemelerde değiştirmez. Sunucu ID’yi kendi `crypto.randomUUID()` çağrısıyla üretir. Müşteri + audit aynı atomik D1 batch’inde yazılır. Audit PK’si kullanıcı ve anahtarın hash’iyle adlandırılır; aynı anda iki kez gönderilirse yalnızca biri ekler. Aynı anahtar ve normalize body tekrarında aynı müşteri, farklı body’de 409 döner. Başka kullanıcı aynı anahtarı kendi işlem kapsamıyla kullanabilir.
 
-Create audit metadata’sı yalnızca alan adları ve idempotency için gerekli request digest’i içerir. Update metadata’sında yalnızca değiştirilen alan adları tutulur. Müşteri adı, telefon, adres, not, parola, cookie veya CSRF değeri kopyalanmaz. `actor_user_id`, eylem (`customer.created` / `customer.updated`), entity ID ve UTC zaman saklanır. Audit yazılamazsa müşteri yazması geri alınır. Audit geçmişi/idempotency kayıtları silinmemelidir.
+Create audit metadata’sı yalnızca alan adları ve idempotency için gerekli request digest’i içerir. Update metadata’sında alan adları, idempotency digest’i, işlem denemesi ve önceki/sonraki sürüm tutulur. Müşteri adı, telefon, adres, not, parola, cookie veya CSRF değeri kopyalanmaz. `actor_user_id`, eylem (`customer.created` / `customer.updated`), entity ID ve UTC zaman saklanır. Audit yazılamazsa müşteri yazması geri alınır. Audit geçmişi/idempotency kayıtları silinmemelidir.
 
-PATCH yalnızca gönderilen alanları değiştirir. Aynı alanın eşzamanlı düzenlenmesinde son yazma geçerlidir; bu aşamada ETag/sürüm çakışma arayüzü yoktur. Müşteri ID/finansal bağlar değişmez; pasife alma geçmiş satış/tahsilatları silmez veya yeniden hesaplamaz. Müşteri detayına toplam borç, açık satışlar ve tahsilat/finansal hareket geçmişi eklenmiştir; ayrı sözleşme: [FINANCE.md](FINANCE.md). Pasif müşterinin mevcut borcu tahsil edilebilir.
+PATCH yalnızca gönderilen alanları değiştirir. PATCH, UUID `Idempotency-Key` ve düzenlemeye başlanan `expected_version` ister. Karşılaştırma, güncelleme, sürüm artırma ve audit atomiktir. Çakışma `409 RECORD_VERSION_CONFLICT`, eksik sürüm `428 VERSION_REQUIRED` verir. Tekrarlar güncellemeyi yeniden uygulamaz; güncel kayıt döner. Form çakışmada girdileri korur; güncel bilgiler yüklenip tekrar onaylanır. Ayrıntı: [RELIABILITY.md](RELIABILITY.md). Müşteri ID/finansal bağlar değişmez; pasife alma geçmiş satış/tahsilatları silmez veya yeniden hesaplamaz. Müşteri detayına toplam borç, açık satışlar ve tahsilat/finansal hareket geçmişi eklenmiştir; ayrı sözleşme: [FINANCE.md](FINANCE.md). Pasif müşterinin mevcut borcu tahsil edilebilir.
 
 ## Kalıcı silme ve pasife alma
 

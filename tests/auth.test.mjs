@@ -1,3 +1,4 @@
+import { migrationSql } from "./migration-source.mjs";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -68,6 +69,9 @@ function logout(auth, csrf = auth.data.csrfToken, headers = {}) {
 }
 
 before(async () => {
+  const config = JSON.parse(await readFile(join(project, "tests/wrangler.jsonc"), "utf8"));
+  assert.equal(config.d1_databases.length, 1); assert.equal(config.d1_databases[0].database_id, "11111111-1111-4111-8111-111111111111");
+  assert.notEqual(config.d1_databases[0].remote, true); assert.equal(config.main, "worker.ts");
   temporary = await mkdtemp(join(tmpdir(), "akcat-auth-test-"));
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
@@ -86,7 +90,7 @@ before(async () => {
     await delay(250);
   }
   assert.ok(ready, "isolated Worker ready within 40 seconds");
-  const schema = (await Promise.all(["0001_initial_schema.sql", "0002_financial_adjustments.sql"].map(file => readFile(join(project, "migrations", file), "utf8")))).join("\n");
+  const schema = await migrationSql();
   const response = await request("/__test/schema", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: schema }) });
   assert.equal(response.status, 200);
 }, { timeout: 60000 });
@@ -336,7 +340,7 @@ test("local CLI D1 adapter works with isolated persistence and rejects an existi
     persist: { path: join(temporary, "cli-state") }, remoteBindings: false });
   try {
     const db = proxy.env.DB;
-    const schema = (await Promise.all(["0001_initial_schema.sql", "0002_financial_adjustments.sql"].map(file => readFile(join(project, "migrations", file), "utf8")))).join("\n");
+    const schema = await migrationSql();
     await db.batch(schema.split(";").map((value) => value.trim()).filter(Boolean).map((value) => db.prepare(value)));
     const now = new Date().toISOString();
     await db.prepare("INSERT INTO users(id,username,password_hash,role,is_active,created_at,updated_at) VALUES(?,?,?,'admin',1,?,?)")
@@ -349,7 +353,11 @@ test("local CLI D1 adapter works with isolated persistence and rejects an existi
 });
 
 let customerAdmin, customerEmployee, managedCustomer;
-function customerRequest(auth, path = "", method = "GET", body, headers = {}) {
+async function customerRequest(auth, path = "", method = "GET", body, headers = {}) {
+  if (method === "PATCH" && body && typeof body === "object" && body.expected_version === undefined) {
+    const current = await customerRequest(auth, path);
+    const row = await current.json(); body = { ...body, expected_version: row.data?.version ?? 1 };
+  }
   return request("/api/v1/customers" + path, { method,
     headers: { Cookie: auth.cookie, Origin: origin, ...(method !== "GET" ? {
       "Content-Type": "application/json", "X-CSRF-Token": auth.data.csrfToken, "Idempotency-Key": randomUUID(),
@@ -401,7 +409,6 @@ test("customers: employee cannot send active status; admin deactivates and react
   const active = await customerRequest(customerEmployee, "?status=active");
   assert.ok((await active.json()).data.every(item => item.id !== managedCustomer.id));
   assert.equal((await customerRequest(customerAdmin, "/" + managedCustomer.id, "PATCH", { is_active: true })).status, 200);
-  assert.equal((await customerRequest(customerAdmin, "/" + managedCustomer.id, "DELETE")).status, 404);
 });
 
 test("customers: Turkish case-insensitive name and formatted phone search; SQL/wildcards stay literal", async () => {
@@ -488,7 +495,7 @@ test("customers: audit records contain actor, action, entity and field names, no
   for (const row of audit) {
     const metadata = JSON.parse(row.metadata);
     assert.ok(Array.isArray(metadata.fields));
-    assert.ok(Object.keys(metadata).every(key => ["fields", "request_hash"].includes(key)));
+    assert.ok(Object.keys(metadata).every(key => ["fields", "request_hash", "attempt", "before_version", "after_version"].includes(key)));
     assert.ok(!row.metadata.includes(managedCustomer.address));
     assert.ok(!row.metadata.includes(managedCustomer.phone));
     assert.ok(!row.metadata.includes(customerEmployee.cookie));
@@ -520,7 +527,11 @@ test("customers: audit failure rolls back the customer mutation atomically", asy
 
 let managedProduct;
 const productInput = () => ({ name: `Ürün ${randomUUID()}`, current_price_kurus: 1999, is_active: true });
-function productRequest(auth, path = "", method = "GET", body, headers = {}) {
+async function productRequest(auth, path = "", method = "GET", body, headers = {}) {
+  if (method === "PATCH" && body && typeof body === "object" && body.expected_version === undefined) {
+    const current = await productRequest(auth, path);
+    const row = await current.json(); body = { ...body, expected_version: row.data?.version ?? 1 };
+  }
   return request("/api/v1/products" + path, { method, headers: { Cookie: auth.cookie, Origin: origin,
     ...(method !== "GET" ? { "Content-Type": "application/json", "X-CSRF-Token": auth.data.csrfToken, "Idempotency-Key": randomUUID() } : {}), ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -558,7 +569,6 @@ test("products: admin changes price, deactivates, filters and reactivates withou
   assert.ok((await (await productRequest(customerEmployee, "?status=active")).json()).data.every(row => row.id !== result.id));
   const active = await productRequest(customerAdmin, "/" + result.id, "PATCH", { is_active: true });
   assert.equal(active.status, 200); assert.equal((await active.json()).data.is_active, true);
-  assert.equal((await productRequest(customerAdmin, "/" + result.id, "DELETE")).status, 404);
   assert.equal((await productRequest(customerEmployee, "/" + result.id)).status, 200);
 });
 test("products: invalid prices, names, bodies and ids are rejected; zero and safe integer maximum are exact", async () => {
@@ -660,7 +670,7 @@ function saleRequest(auth, path = "", method = "GET", body, headers = {}) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 const saleInput = (amount = 0, method = null) => ({ customer_id: saleCustomer.id,
-  items: [{ product_id: saleProduct.id, quantity: 2 }], payment: { amount_kurus: amount, method } });
+  items: [{ product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: 2 }], payment: { amount_kurus: amount, method } });
 test("sales: unauthenticated access is rejected; isolated customer's history is empty", async () => {
   saleCustomer = (await (await customerRequest(customerEmployee, "", "POST", customerInput())).json()).data;
   saleProduct = (await (await productRequest(customerAdmin, "", "POST", { ...productInput(), current_price_kurus: 25000 })).json()).data;
@@ -671,7 +681,7 @@ test("sales: unauthenticated access is rejected; isolated customer's history is 
 });
 test("sales: employee creates fully paid cash sale with server prices and snapshots", async () => {
   const response = await saleRequest(customerEmployee, "", "POST", { ...saleInput(50000, "cash"), total_kurus: 1,
-    items: [{ product_id: saleProduct.id, quantity: 2, unit_price_kurus: 1, line_total_kurus: 2 }] });
+    items: [{ product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: 2, line_total_kurus: 2 }] });
   assert.equal(response.status, 201);
   const { data } = await response.json();
   assert.equal(data.total_kurus, 50000); assert.equal(data.paid_kurus, 50000); assert.equal(data.remaining_kurus, 0);
@@ -692,37 +702,37 @@ test("sales: credit creates no payment; multi-product bank payment retains separ
   assert.equal(data.payment_status, "credit"); assert.equal(data.remaining_kurus, 50000); assert.deepEqual(data.payments, []);
   assert.equal((await sql("SELECT count(*) AS n FROM payments WHERE sale_id=?", [data.id]))[0].n, 0);
   const multi = await saleRequest(customerEmployee, "", "POST", { ...saleInput(20000, "bank"), items: [
-    { product_id: saleProduct.id, quantity: 2 }, { product_id: otherSaleProduct.id, quantity: 3 }] });
+    { product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: 2 }, { product_id: otherSaleProduct.id, expected_list_price_kurus: 10000, quantity: 3 }] });
   assert.equal(multi.status, 201); const result = (await multi.json()).data;
   assert.equal(result.total_kurus, 80000); assert.equal(result.remaining_kurus, 60000); assert.equal(result.items.length, 2);
   assert.equal(result.payments[0].method, "bank");
 });
-test("sales: zero-price product is valid; quantity, payment and safe-integer bounds are enforced", async () => {
+test("sales: zero-price catalog requires a positive override; quantity, payment and safe-integer bounds are enforced", async () => {
   const before = (await sql("SELECT count(*) AS n FROM sales"))[0].n;
   for (const body of [
-    { ...saleInput(), items: [] }, ...[0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1].map(quantity => ({ ...saleInput(), items: [{ product_id: saleProduct.id, quantity }] })),
+    { ...saleInput(), items: [] }, ...[0, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1].map(quantity => ({ ...saleInput(), items: [{ product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity }] })),
     ...[-1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1].map(amount_kurus => ({ ...saleInput(), payment: { amount_kurus, method: "cash" } })),
     { ...saleInput(), payment: { amount_kurus: 1 } }, { ...saleInput(), payment: { amount_kurus: 1, method: "crypto" } },
-    { ...saleInput(), items: [{ product_id: saleProduct.id, quantity: 1 }, { product_id: saleProduct.id, quantity: 2 }] },
+    { ...saleInput(), items: [{ product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: 1 }, { product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: 2 }] },
   ]) assert.equal((await saleRequest(customerEmployee, "", "POST", body)).status, 400);
   assert.equal((await saleRequest(customerEmployee, "", "POST", saleInput(50001, "cash"))).status, 422);
-  assert.equal((await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: saleProduct.id, quantity: Number.MAX_SAFE_INTEGER }] })).status, 422);
+  assert.equal((await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: Number.MAX_SAFE_INTEGER }] })).status, 422);
   assert.equal((await sql("SELECT count(*) AS n FROM sales"))[0].n, before);
   const free = (await (await productRequest(customerAdmin, "", "POST", { ...productInput(), current_price_kurus: 0 })).json()).data;
-  const response = await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: free.id, quantity: 1 }] });
-  assert.equal(response.status, 201); assert.equal((await response.json()).data.total_kurus, 0);
+  const response = await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: free.id, expected_list_price_kurus: 0, quantity: 1 }] });
+  assert.equal(response.status, 422);
 });
 test("sales: sum overflow and line overflow reject safely before multiplication/storage", async () => {
   const huge = (await (await productRequest(customerAdmin, "", "POST", { ...productInput(), current_price_kurus: Number.MAX_SAFE_INTEGER })).json()).data;
-  for (const items of [[{ product_id: huge.id, quantity: 2 }], [{ product_id: huge.id, quantity: 1 }, { product_id: saleProduct.id, quantity: 1 }]]) {
+  for (const items of [[{ product_id: huge.id, expected_list_price_kurus: Number.MAX_SAFE_INTEGER, quantity: 2 }], [{ product_id: huge.id, expected_list_price_kurus: Number.MAX_SAFE_INTEGER, quantity: 1 }, { product_id: saleProduct.id, expected_list_price_kurus: 25000, quantity: 1 }]]) {
     assert.equal((await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items })).status, 422);
   }
-  const valid = await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: huge.id, quantity: 1 }] });
+  const valid = await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: huge.id, expected_list_price_kurus: Number.MAX_SAFE_INTEGER, quantity: 1 }] });
   assert.equal(valid.status, 201); assert.equal((await valid.json()).data.total_kurus, Number.MAX_SAFE_INTEGER);
 });
 test("sales: inactive/missing products and inactive/missing customers reject all writes", async () => {
   await productRequest(customerAdmin, "/" + otherSaleProduct.id, "PATCH", { is_active: false });
-  for (const product_id of [otherSaleProduct.id, randomUUID()]) assert.equal((await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id, quantity: 1 }] })).status, 422);
+  for (const product_id of [otherSaleProduct.id, randomUUID()]) assert.equal((await saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id, expected_list_price_kurus: 10000, quantity: 1 }] })).status, 422);
   await productRequest(customerAdmin, "/" + otherSaleProduct.id, "PATCH", { is_active: true });
   assert.equal((await saleRequest(customerEmployee, "", "POST", { ...saleInput(), customer_id: randomUUID() })).status, 422);
   await customerRequest(customerAdmin, "/" + saleCustomer.id, "PATCH", { is_active: false });
@@ -762,13 +772,13 @@ test("sales: concurrent price/active changes cannot mix header and snapshot stat
   for (let index = 0; index < 6; index++) {
     await productRequest(customerAdmin, "/" + otherSaleProduct.id, "PATCH", { current_price_kurus: 10000, is_active: true });
     const [sale, patch] = await Promise.all([
-      saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: otherSaleProduct.id, quantity: 3 }] }),
+      saleRequest(customerEmployee, "", "POST", { ...saleInput(), items: [{ product_id: otherSaleProduct.id, expected_list_price_kurus: 10000, quantity: 3 }] }),
       productRequest(customerAdmin, "/" + otherSaleProduct.id, "PATCH", { current_price_kurus: 12000, is_active: index % 2 === 0 }),
     ]);
-    assert.equal(patch.status, 200); assert.ok([201, 422].includes(sale.status));
+    assert.equal(patch.status, 200); assert.ok([201, 409, 422].includes(sale.status));
     if (sale.status === 201) {
       const { data } = await sale.json();
-      assert.ok([10000, 12000].includes(data.items[0].unit_price_kurus));
+      assert.equal(data.items[0].unit_price_kurus, 10000);
       assert.equal(data.total_kurus, data.items[0].unit_price_kurus * 3); assert.equal(data.total_kurus, data.items[0].line_total_kurus);
     }
   }

@@ -1,16 +1,16 @@
 # Ürün yönetimi API sözleşmesi
 
-Mevcut `products` ve `audit_logs` kullanılır. Yeni migration, kategori, stok, barkod veya depo alanı yoktur. `admin` oluşturur/düzenler ve geçmiş satışlarda hiç kullanılmamış ürünleri kalıcı silebilir; `employee` yalnızca liste/detay okur. Yetki mevcut authentication middleware’iyle API’de denetlenir.
+Mevcut `products` ve `audit_logs` kullanılır. `0004_record_versions.sql` sürüm alanını ekler; kategori, stok, barkod veya depo alanı yoktur. `admin` oluşturur/düzenler ve geçmiş satışlarda hiç kullanılmamış ürünleri kalıcı silebilir; `employee` yalnızca liste/detay okur. Yetki mevcut authentication middleware’iyle API’de denetlenir.
 
 | Metot / yol | İstek | Yanıt |
 |---|---|---|
 | `GET /api/v1/products` | `q`, `status=all/active/inactive`, `page`, `pageSize` | `{data:Product[],pagination:{page,pageSize,total,totalPages}}` |
 | `GET /api/v1/products/:id` | UUID | `200 {data:Product}` |
 | `POST /api/v1/products` | JSON + UUID `Idempotency-Key`; admin | İlk istek `201 {data:Product}`, tekrar `200` |
-| `PATCH /api/v1/products/:id` | En az bir izinli JSON alanı; admin | `200 {data:Product}` |
+| `PATCH /api/v1/products/:id` | En az bir izinli JSON alanı + `expected_version` + UUID `Idempotency-Key`; admin | `200 {data:Product}` |
 | `DELETE /api/v1/products/:id` | UUID + UUID `Idempotency-Key`; admin; gövde yok | `200 {success:true,id}`; geçmiş satışta kullanım `409 PRODUCT_IN_USE` |
 
-`Product`: `id`, `name`, `current_price_kurus`, boolean `is_active`, UTC ISO `created_at` / `updated_at`. Yazılabilir alanlar yalnızca `name`, `current_price_kurus`, `is_active`. Oluşturmada ad/fiyat zorunlu; aktiflik varsayılanı `true`. PATCH gönderilmeyen alanları korur. Ad kırpılır, NFC normalize edilir, 1–160 karakterdir; kontrol karakterleri reddedilir. Fiyat JSON number olarak **0–9007199254740991 arasında tam sayı kuruş** olmalıdır. Negatif, kesirli, string/null ve güvenli tam sayı sınırını aşan fiyatlar reddedilir. Sıfır fiyat geçerlidir. Bilinmeyen alanlar reddedilir; gövde sınırı 16 KiB.
+`Product`: `id`, `name`, `current_price_kurus`, boolean `is_active`, UTC ISO `created_at` / `updated_at`, pozitif tam sayı `version`. Yazılabilir alanlar yalnızca `name`, `current_price_kurus`, `is_active`. Oluşturmada ad/fiyat zorunlu; aktiflik varsayılanı `true`. PATCH gönderilmeyen alanları korur. Ad kırpılır, NFC normalize edilir, 1–160 karakterdir; kontrol karakterleri reddedilir. Fiyat JSON number olarak **0–9007199254740991 arasında tam sayı kuruş** olmalıdır. Negatif, kesirli, string/null ve güvenli tam sayı sınırını aşan fiyatlar reddedilir. Sıfır fiyat geçerlidir. Bilinmeyen alanlar reddedilir; gövde sınırı 16 KiB.
 
 Liste varsayılanı tüm durumlar, sayfa 1, boyut 20. Sayfa 1–100000, boyut 1–100, arama en fazla 100 karakter. Ad araması Türkçe harf dönüşümlerini destekler; `%`, `_` ve SQL parçaları literal alt dizidir. Girdiler SQL parametresine bağlanır. Sıralama `created_at DESC, id DESC`; sayım/sayfa aynı D1 batch’inde okunur. Boş sonuç gerçek pagination ve `data:[]` döndürür. Farklı sayfa istekleri arasında snapshot garantisi yoktur; büyük kataloglarda substring araması ayrıca optimize edilebilir.
 
@@ -20,7 +20,7 @@ Liste varsayılanı tüm durumlar, sayfa 1, boyut 20. Sayfa 1–100000, boyut 1�
 
 İstemci form başına UUID üretir ve yeniden denemede korur. Mevcut audit PK’si `product:create:` öneki + kullanıcı/anahtar hash’iyle işlemi belirler. Aynı normalize body/anahtar eşzamanlı veya ardışık gönderilince tek ürün ve tek oluşturma audit’i oluşur; farklı body aynı anahtarla 409 verir. Kullanıcılar ve müşteri oluşturma işlemleri ayrı kapsamdadır. Yeni anahtar yeni işlemdir; ürün adları benzersiz olmak zorunda değildir. Yanıt kaybolduktan sonra bilgileri değiştirmeden tekrar deneyin; çakışmada önce ürün listesini kontrol edin. Audit/idempotency kayıtları silinmemelidir.
 
-Ürün yazması ve `product.created` / `product.updated` audit’i aynı atomik [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch) içindedir; audit hatası ürünü de geri alır. Audit actor, entity, UTC zaman, alan adları ve oluşturma request hash’ini içerir; cookie/token/parola içermez. PATCH eşzamanlı düzenlemelerinde son yazma geçerlidir; sürüm/ETag arayüzü yoktur.
+Ürün yazması ve `product.created` / `product.updated` audit’i aynı atomik [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch) içindedir; audit hatası ürünü de geri alır. Audit actor, entity, UTC zaman, alan adları ve oluşturma request hash’ini içerir; cookie/token/parola içermez. PATCH, beklenen sürümü aynı atomik yazmada kontrol eder; uyuşmazlık `409 RECORD_VERSION_CONFLICT`, eksik sürüm `428 VERSION_REQUIRED` olur. Tekrar isteği aynı anahtar/sürüm/gövdeyle gönderilir ve daha yeni düzenlemeyi ezmez; güncel kayıt döner. Ayrıntı: [RELIABILITY.md](RELIABILITY.md).
 
 ### Kalıcı silme
 
@@ -60,3 +60,7 @@ API’de bağımsız lint script’i yoktur; web’in mevcut ESLint’i ile `..\
 | Kök dokümanlar | `PROJE.md`, `MIMARI_TASARIM.md` |
 
 Doğrulanan sonuçlar: 48 API testi (23 auth, 13 müşteri, 12 ürün), 3 fiyat birim testi; 13 auth, 10 müşteri ve 9 ürün tarayıcı kontrolü. Web/API TypeScript ve build; API kaynak lint’i başarılı. Web lint’i hata vermedi; üretilmiş `worker-configuration.d.ts` dosyasında mevcut iki gereksiz eslint-disable uyarısı var. Ürün form/liste görünümü 320, 390 ve 1440 px’de kontrol edildi; yatay taşma yok. Şema, Worker binding’leri, bağımlılıklar ve gerçek veriler değişmedi. Deploy/commit/push yapılmadı.
+
+## Fiyat geçmişi
+
+Yalnızca admin: `GET /api/v1/products/:id/price-history?page=1&pageSize=10` (boyut 1–100). Yanıt `{data:[{id,old_price_kurus,new_price_kurus,actor_user_id,username,created_at}],pagination}` biçimindedir. Yeni fiyat yazılırken gerçek DB eski fiyatı aynı audit/batch içinde saklanır; aynı fiyat veya sadece isim değişikliği fiyat geçmişinde görünmez. Bilinmeyen eski fiyatlar doldurulmaz. Ürün detayında admin için yüklenme/boş/hata/sayfalama vardır; employee bu isteği göndermez ve API de 403 verir.

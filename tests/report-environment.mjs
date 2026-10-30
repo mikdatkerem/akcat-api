@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { migrationSql } from './migration-source.mjs'
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
@@ -9,11 +10,11 @@ import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import { hashPassword } from '../src/security/password.ts'
 
-export async function reportEnvironment({ migrations = ['0001_initial_schema.sql', '0002_financial_adjustments.sql'] } = {}) {
-  assert.ok(migrations.every(file => ['0001_initial_schema.sql', '0002_financial_adjustments.sql'].includes(file)))
+export async function reportEnvironment({ migrations } = {}) {
   const project = resolve(dirname(fileURLToPath(import.meta.url)), '..'), guard = randomBytes(32).toString('hex')
   const config = JSON.parse(await readFile(join(project, 'tests/wrangler.jsonc'), 'utf8'))
   assert.equal(config.d1_databases?.[0]?.database_id, '11111111-1111-4111-8111-111111111111', 'isolated test database identity')
+  assert.equal(config.d1_databases.length, 1); assert.notEqual(config.d1_databases[0].remote, true); assert.equal(config.main, 'worker.ts')
   const temporary = await mkdtemp(join(tmpdir(), 'akcat-reports-test-')), origin = 'http://localhost:5173'
   const socket = createServer(); await new Promise(done => socket.listen(0, '127.0.0.1', done)); const port = socket.address().port
   await new Promise(done => socket.close(done))
@@ -40,8 +41,16 @@ export async function reportEnvironment({ migrations = ['0001_initial_schema.sql
     return { cookie: response.headers.get('set-cookie').split(';')[0], data: await response.json() }
   }
   const read = (auth, path, headers = {}) => request(path, { headers: { Cookie: auth.cookie, Origin: origin, ...headers } })
-  const write = (auth, path, body, method = 'POST', headers = {}) => request(path, { method, headers: { Cookie: auth.cookie, Origin: origin, 'Content-Type': 'application/json',
-    'X-CSRF-Token': auth.data.csrfToken, 'Idempotency-Key': randomUUID(), ...headers }, body: JSON.stringify(body) })
+  // Fixture mutations edit the freshly read version. Conflict/legacy tests explicitly
+  // provide a captured version or use request() to send the unmodified wire contract.
+  const write = async (auth, path, body, method = 'POST', headers = {}) => {
+    if (method === 'PATCH' && /^\/api\/v1\/(products|customers)\//.test(path) && body && typeof body === 'object' && body.expected_version === undefined) {
+      const current = await read(auth, path), row = await current.json()
+      body = { ...body, expected_version: row.data?.version ?? 1 }
+    }
+    return request(path, { method, headers: { Cookie: auth.cookie, Origin: origin, 'Content-Type': 'application/json',
+      'X-CSRF-Token': auth.data.csrfToken, 'Idempotency-Key': randomUUID(), ...headers }, body: JSON.stringify(body) })
+  }
   try {
     let ready = false
     for (let attempt = 0; attempt < 160; attempt++) {
@@ -50,7 +59,7 @@ export async function reportEnvironment({ migrations = ['0001_initial_schema.sql
       await delay(250)
     }
     assert.ok(ready)
-    const response = await request('/__test/schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: (await Promise.all(migrations.map(file => readFile(join(project, 'migrations', file), 'utf8')))).join('\n') }) })
+    const response = await request('/__test/schema', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: await migrationSql(migrations) }) })
     assert.equal(response.status, 200)
     return { close, request, sql, fixture, read, write }
   } catch (error) { await close(); throw error }

@@ -5,6 +5,7 @@ import { authenticate, requireRole } from "../src/auth/middleware";
 import { bootstrapAdmin, BootstrapUnavailable } from "../src/auth/bootstrap";
 import { AuthError } from "../src/auth/errors";
 import type { AppEnv, AppBindings } from "../src/types";
+import { tokenHash } from "../src/security/tokens";
 
 type TestBindings = AppBindings & { TEST_KEY: string };
 const harness = new Hono<{ Bindings: TestBindings }>();
@@ -41,6 +42,35 @@ harness.all("*", (c) => {
   const url = new URL(c.req.url);
   const mode = c.req.header("X-Test-Mode");
   const env = { ...c.env };
+  // Deterministic race: change authority AFTER authenticate's first read, BEFORE the
+  // production repository's batch. Available only behind the isolated harness key.
+  const change = c.req.header("X-Test-Authorization-Change");
+  if (change && ["revoked", "inactive", "demoted", "expired"].includes(change)) {
+    const raw = c.req.header("Cookie")?.match(/akcat_session_dev=([^;]+)/)?.[1] ?? "";
+    const sessionId = tokenHash(raw), original = env.DB;
+    let changed = false;
+    env.DB = new Proxy(original, { get(target, key) {
+      if (key === "withSession") return (...args: Parameters<D1Database["withSession"]>) => {
+        const session = target.withSession(...args);
+        return new Proxy(session, { get(current, property) {
+          if (property === "batch") return async (statements: D1PreparedStatement[]) => {
+            if (!changed) {
+              changed = true;
+              const sql = change === "revoked" ? "UPDATE sessions SET revoked_at='2000-01-01T00:00:00.000Z' WHERE id=?"
+                : change === "expired" ? "UPDATE sessions SET expires_at='2000-01-01T00:00:00.000Z' WHERE id=?"
+                  : `UPDATE users SET ${change === "inactive" ? "is_active=0" : "role='employee'"} WHERE id=(SELECT user_id FROM sessions WHERE id=?)`;
+              await original.prepare(sql).bind(sessionId).run();
+            }
+            return current.batch(statements);
+          };
+          const value = Reflect.get(current, property);
+          return typeof value === "function" ? value.bind(current) : value;
+        } });
+      };
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+  }
   if (mode === "secure") {
     url.protocol = "https:";
     url.host = "api.akcat.test";

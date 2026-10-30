@@ -1,3 +1,4 @@
+import { ProductPriceHistory } from "./products/priceHistory";
 import { AdjustmentList } from "./finance/adjustments";
 import { missingFinancialSchema } from "./database/errors";
 
@@ -26,7 +27,7 @@ const openapi = fromHono(app, {
 
 app.onError((error, c) => {
   c.header("Cache-Control", "no-store");
-  if (error instanceof AuthError) return c.json({ error: { code: error.code, message: error.message } }, error.status);
+  if (error instanceof AuthError) return c.json({ error: { code: error.code, message: error.message, ...(error.details === undefined ? {} : { details: error.details }) } }, error.status);
   if (missingFinancialSchema(error)) {
     console.error("Database schema prerequisite missing; apply pending migrations for the selected environment.");
     return c.json({ error: { code: "DATABASE_SCHEMA_REQUIRED", message: "Veritabanı güncellemesi gerekli. Sistem yöneticinizle iletişime geçin." } }, 503);
@@ -123,6 +124,7 @@ app.use("/api/v1/products/*", async (c, next) => {
 openapi.get("/api/v1/products", ProductList);
 openapi.post("/api/v1/products", ProductCreate);
 openapi.get("/api/v1/products/:id", ProductGet);
+openapi.get("/api/v1/products/:id/price-history", ProductPriceHistory);
 openapi.patch("/api/v1/products/:id", ProductPatch);
 openapi.delete("/api/v1/products/:id", ProductDelete);
 

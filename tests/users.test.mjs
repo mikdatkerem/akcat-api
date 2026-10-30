@@ -22,7 +22,7 @@ before(async () => {
   env = await reportEnvironment(); admin = await env.fixture('admin'); employee = await env.fixture()
   const customer = (await json(await env.write(employee, '/api/v1/customers', { name: 'İzole hesap ilişkileri', address: 'İzole test' }), 201)).data
   const product = (await json(await env.write(admin, '/api/v1/products', { name: 'İzole hesap ürünü', current_price_kurus: 50000 }), 201)).data
-  await json(await env.write(employee, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: 10000, method: 'cash' } }), 201)
+  await json(await env.write(employee, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, expected_list_price_kurus: 50000, quantity: 1 }], payment: { amount_kurus: 10000, method: 'cash' } }), 201)
   financialSnapshot = await originals()
 }, { timeout: 60000 })
 after(async () => { await env?.close() })
@@ -148,6 +148,6 @@ test('users: username edit preserves historical user IDs and financial data; phy
   const rename = 'renamed_' + randomUUID().slice(0, 8)
   assert.equal((await mutation(route(employee.data.user.id), { username: rename }, 'PATCH')).status, 200)
   assert.deepEqual(await originals(), financialSnapshot)
-  assert.equal((await env.request(route(account.id), { method: 'DELETE', headers: { Cookie: admin.cookie, Origin: 'http://localhost:5173', 'X-CSRF-Token': admin.data.csrfToken } })).status, 404)
+  assert.equal((await env.request(route(account.id), { method: 'DELETE', headers: { Cookie: admin.cookie, Origin: 'http://localhost:5173', 'X-CSRF-Token': admin.data.csrfToken } })).status, 400)
   assert.deepEqual(await env.sql('PRAGMA foreign_key_check'), [])
 })

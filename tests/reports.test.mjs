@@ -12,7 +12,7 @@ const report = async (kind, query = period, actor = employee) => {
 const saved = async response => { assert.equal(response.status, 201); return (await response.json()).data }
 const createSale = async (actor, price, paid = 0, method = 'cash') => {
   const response = await env.write(admin, '/api/v1/products/' + product.id, { current_price_kurus: price }, 'PATCH'); assert.equal(response.status, 200)
-  return saved(await env.write(actor, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: paid, method: paid ? method : null } }))
+  return saved(await env.write(actor, '/api/v1/sales', { customer_id: customer.id, items: [{ product_id: product.id, expected_list_price_kurus: price, quantity: 1 }], payment: { amount_kurus: paid, method: paid ? method : null } }))
 }
 const stampSale = async (sale, time) => {
   await env.sql('UPDATE sales SET created_at=?,updated_at=? WHERE id=?', [time, time, sale.id]); await env.sql('UPDATE payments SET created_at=? WHERE sale_id=?', [time, sale.id])

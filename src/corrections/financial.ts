@@ -1,6 +1,7 @@
+import type { AuthSession } from "../types";
+import { authorizedBatch } from "../security/authorizedBatch";
 import { AuthError, forbidden } from "../auth/errors";
 import { tokenHash } from "../security/tokens";
-import type { PublicUser } from "../types";
 import { balancesCte, validPayment, safeMoney } from "../finance/sql";
 import type { ApprovalBody } from "./schemas";
 
@@ -39,7 +40,8 @@ export function presentPreview(row: Record<string, unknown> | undefined) {
   return { ...row, requires_external_confirmation: row.requires_external_confirmation === 1 };
 }
 
-export async function approveFinancial(db: D1Database, actor: PublicUser, id: string, key: string, body: ApprovalBody) {
+export async function approveFinancial(db: D1Database, auth: AuthSession, id: string, key: string, body: ApprovalBody) {
+  const actor = auth.user;
   if (actor.role !== "admin") throw forbidden();
   if (body.expected_amount_kurus === undefined || body.expected_sale_remaining_kurus === undefined || body.expected_customer_debt_kurus === undefined)
     throw new AuthError(400, "FINANCIAL_PREVIEW_REQUIRED", "Güncel tutarı ve bakiyeleri inceleyerek onaylayın.");
@@ -49,7 +51,7 @@ export async function approveFinancial(db: D1Database, actor: PublicUser, id: st
   const now = new Date().toISOString(), reversal = crypto.randomUUID(), adjustment = crypto.randomUUID();
   const session = db.withSession("first-primary");
   const gate = `a.id = ? AND json_extract(a.metadata, '$.attempt') = ?`;
-  const results = await session.batch([
+  const results = await authorizedBatch(session, auth, [
     session.prepare(`${balancesCte} INSERT INTO audit_logs(id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
       SELECT ?, ?, 'correction.approved', 'correction_request', r.id,
         json_object('reason', ?, 'before', 'pending', 'after', 'approved', 'approved_by', ?, 'requested_by', r.requested_by,

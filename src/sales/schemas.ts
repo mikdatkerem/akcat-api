@@ -6,7 +6,7 @@ export const createSaleSchema = z.object({
   customer_id: z.uuid(),
   // Only the optional unit price is writable; line/sale totals and list snapshots remain server-owned.
   items: z.array(z.object({ product_id: z.uuid(), quantity: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
-    unit_price_kurus: money.min(1).optional() }))
+    unit_price_kurus: money.min(1).optional(), expected_list_price_kurus: money.optional() }))
     .min(1).max(50).refine(items => new Set(items.map(item => item.product_id)).size === items.length),
   payment: z.object({ amount_kurus: money, method: paymentMethod.nullable().optional() })
     .refine(value => value.amount_kurus === 0 || !!value.method)

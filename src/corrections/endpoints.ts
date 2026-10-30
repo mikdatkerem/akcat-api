@@ -17,7 +17,7 @@ export class SaleCancel extends OpenAPIRoute {
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
     const actor = c.get("auth").user;
-    await cancelSale(c.env.DB, actor, data.params.id, data.headers["idempotency-key"], data.body.reason);
+    await cancelSale(c.env.DB, c.get("auth"), data.params.id, data.headers["idempotency-key"], data.body.reason);
     return c.json({ data: await getSale(c.env.DB, data.params.id, actor) });
   }
 }
@@ -25,7 +25,7 @@ export class CorrectionCreate extends OpenAPIRoute {
   schema = { tags: ["Corrections"], summary: "İncelenecek düzeltme talebi oluştur", request: { headers, body: { required: true, ...json(createCorrectionSchema) } }, responses: { "201": single, "200": single } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    const result = await createCorrection(c.env.DB, c.get("auth").user, data.headers["idempotency-key"], data.body);
+    const result = await createCorrection(c.env.DB, c.get("auth"), data.headers["idempotency-key"], data.body);
     return c.json({ data: result.data }, result.created ? 201 : 200);
   }
 }
@@ -48,13 +48,13 @@ export class CorrectionApprove extends OpenAPIRoute {
   schema = { tags: ["Corrections"], summary: "Admin: güvenli tam ters kayıt, teyitli harici iade veya satış iptali", request: { params: saleParams, headers, body: { required: true, ...json(approvalBody) } }, responses: { "200": single } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    return c.json({ data: await reviewCorrection(c.env.DB, c.get("auth").user, data.params.id, data.headers["idempotency-key"], data.body.reason, true, data.body) });
+    return c.json({ data: await reviewCorrection(c.env.DB, c.get("auth"), data.params.id, data.headers["idempotency-key"], data.body.reason, true, data.body) });
   }
 }
 export class CorrectionReject extends OpenAPIRoute {
   schema = { tags: ["Corrections"], summary: "Admin: talebi gerekçeli reddet", request: { params: saleParams, headers, body: { required: true, ...json(reasonBody) } }, responses: { "200": single } };
   async handle(c: AppContext) {
     const data = await this.getValidatedData<typeof this.schema>().catch(() => { throw invalid(); });
-    return c.json({ data: await reviewCorrection(c.env.DB, c.get("auth").user, data.params.id, data.headers["idempotency-key"], data.body.reason, false) });
+    return c.json({ data: await reviewCorrection(c.env.DB, c.get("auth"), data.params.id, data.headers["idempotency-key"], data.body.reason, false) });
   }
 }

@@ -7,7 +7,7 @@ let env, admin, otherAdmin, employee, customer, product, first, request, origina
 const saved = async response => { assert.equal(response.status, 201, await response.clone().text()); return (await response.json()).data }
 const get = async (path, actor = admin) => { const response = await env.read(actor, '/api/v1/' + path); assert.equal(response.status, 200); return response.json() }
 const sale = async (paid = 10000, method = 'cash') => saved(await env.write(employee, '/api/v1/sales', {
-  customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: paid, method: paid ? method : null },
+  customer_id: customer.id, items: [{ product_id: product.id, expected_list_price_kurus: 50000, quantity: 1 }], payment: { amount_kurus: paid, method: paid ? method : null },
 }))
 const correction = async (type, id) => saved(await env.write(employee, '/api/v1/correction-requests', {
   target_type: type.startsWith('payment_') ? 'payment' : 'sale', target_id: id, correction_type: type,

@@ -11,7 +11,7 @@ export function registerFinanceTests({ request, sql, origin, admin, employee, cu
   const newSale = async (total = 50000, initial = 10000, actor = employee(), targetCustomer = customer) => {
     const created = await productRequest(admin(), '', 'POST', { name: 'İzole finans ürünü ' + randomUUID(), current_price_kurus: total })
     const item = (await created.json()).data
-    const response = await saleRequest(actor, '', 'POST', { customer_id: targetCustomer.id, items: [{ product_id: item.id, quantity: 1 }], payment: { amount_kurus: initial, method: initial ? 'cash' : null } })
+    const response = await saleRequest(actor, '', 'POST', { customer_id: targetCustomer.id, items: [{ product_id: item.id, expected_list_price_kurus: total, quantity: 1 }], payment: { amount_kurus: initial, method: initial ? 'cash' : null } })
     assert.equal(response.status, 201); return (await response.json()).data
   }
   const receivables = async () => (await (await read(`/api/v1/customers/${customer.id}/receivables`)).json())

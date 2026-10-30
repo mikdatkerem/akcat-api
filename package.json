@@ -11,7 +11,7 @@
     "cf-typegen": "wrangler types",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json",
     "build": "wrangler deploy --dry-run --outdir dist",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 tests/auth.test.mjs tests/reports.test.mjs tests/adjustments.test.mjs tests/audit.test.mjs tests/migrations.test.mjs tests/local-fixes.test.mjs tests/users.test.mjs tests/account.test.mjs",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 tests/auth.test.mjs tests/reports.test.mjs tests/adjustments.test.mjs tests/audit.test.mjs tests/migrations.test.mjs tests/local-fixes.test.mjs tests/users.test.mjs tests/account.test.mjs tests/reliability.test.mjs",
     "audit:performance": "node --experimental-strip-types tests/performance-audit.mjs",
     "bootstrap:admin": "node --experimental-strip-types scripts/bootstrap-admin.mjs"
   },

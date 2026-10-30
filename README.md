@@ -45,3 +45,7 @@ npm.cmd run build
 `build` yalnızca `wrangler deploy --dry-run --outdir dist` ile yerel bundle üretir; yükleme/deploy yapmaz. `test`, gerçek Workers runtime’ını ayrı test yapılandırması, farklı D1 kimliği ve geçici OS dizininde başlatır; mevcut yerel veya uzak D1’i kullanmaz. Şema ve kullanıcı fixture’ları yalnızca bu izole test veritabanında oluşturulur ve test sonunda geçici dizin temizlenir. Node.js 22.13+ gerekir; paylaşılan TypeScript modülleri CLI/testlerde `--experimental-strip-types` ile çalışır. API için lint komutu yoktur. Gerçek deploy, migration uygulama ve ilk admin kurulumu açık operatör eylemidir; testler gerçek admin oluşturmaz.
 
 Üretim öncesi denetim, yerel performans probu (`npm.cmd run audit:performance`) ve açık kalan çıkış kapıları: [PRODUCTION_AUDIT.md](docs/PRODUCTION_AUDIT.md). Manuel yapılandırma, yedek/kurtarma, migration ve edge ölçüm planı: [RELEASE_RUNBOOK.md](docs/RELEASE_RUNBOOK.md). Bu belgeler deploy yetkisi veya uygulanmış uzak migration anlamına gelmez.
+
+## Güvenilirlik güncellemesi (30.10.2026)
+
+`0004_record_versions.sql` müşteri/ürün sürüm kontrolünü ekler. Yeni PATCH sözleşmesi `expected_version` ve UUID `Idempotency-Key` ister; satış katalog fiyatı beklentisini atomik doğrular. Kritik yazmalar güncel oturum/rol kontrolünü aynı batch içinde tekrarlar. Testler numaralı migration dizinini otomatik yükler; 0001 yükseltme senaryoları korunur. Yeni/eskiler karışık çalışırken yazmalar açılmamalıdır. Ayrıntılar ve manuel yayın planı: [RELIABILITY.md](docs/RELIABILITY.md).

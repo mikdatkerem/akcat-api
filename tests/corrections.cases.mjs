@@ -8,7 +8,7 @@ export function registerCorrectionTests({ request, sql, origin, admin, employee,
     Cookie: auth.cookie, Origin: origin, 'Content-Type': 'application/json', 'X-CSRF-Token': auth.data.csrfToken, 'Idempotency-Key': key, ...extra }, body: JSON.stringify(body) })
   const read = (path, auth = employee()) => request('/api/v1' + path, { headers: { Cookie: auth.cookie, Origin: origin } })
   const newSale = async (actor = employee(), paid = 0) => {
-    const response = await saleRequest(actor, '', 'POST', { customer_id: customer.id, items: [{ product_id: product.id, quantity: 1 }], payment: { amount_kurus: paid, method: paid ? 'cash' : null } })
+    const response = await saleRequest(actor, '', 'POST', { customer_id: customer.id, items: [{ product_id: product.id, expected_list_price_kurus: 12500, quantity: 1 }], payment: { amount_kurus: paid, method: paid ? 'cash' : null } })
     assert.equal(response.status, 201); return (await response.json()).data
   }
   const cancel = (sale, auth = employee(), key, reason = 'Hatalı satış iptali') => write(auth, '/sales/' + sale.id + '/cancel', { reason }, key)

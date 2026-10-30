@@ -21,9 +21,10 @@ export const createCustomerSchema = z.object({
 }).strict();
 // Do not use .partial() on transformed optional fields: omitted fields must stay omitted.
 export const patchCustomerSchema = z.object({
+  expected_version: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   name: text(160).optional(), phone: phoneSchema.optional(), address: text(1000).optional(),
   delivery_notes: notes.optional(), is_active: z.boolean().optional(),
-}).strict().refine(value => Object.keys(value).length > 0);
+}).strict().refine(value => Object.keys(value).some(field => field !== "expected_version"));
 export const customerParams = z.object({ id: z.uuid() });
 export const customerQuery = z.object({
   q: z.preprocess(value => value === null ? "" : value, z.string().trim().normalize("NFC").max(100).default("")),
@@ -32,6 +33,7 @@ export const customerQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 export const customerSchema = z.object({
+  version: z.number().int().positive(),
   id: z.uuid(), name: z.string(), phone: z.string().nullable(), address: z.string(),
   delivery_notes: z.string().nullable(), is_active: z.boolean(), created_at: z.string(), updated_at: z.string(),
 });

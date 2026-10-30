@@ -1,3 +1,5 @@
+import type { AuthSession } from "../types";
+import { authorizedBatch } from "../security/authorizedBatch";
 import { AuthError } from "../auth/errors";
 import { tokenHash } from "../security/tokens";
 import { balancesCte, safeMoney, validPayment } from "./sql";
@@ -19,13 +21,14 @@ export function presentPayment(row: Record<string, unknown>) {
 }
 export const pageInfo = (query: PageQuery, total: number) => ({ page: query.page, pageSize: query.pageSize, total, totalPages: Math.ceil(total / query.pageSize) });
 
-export async function createPayment(db: D1Database, actor: string, key: string, input: CreatePaymentInput) {
+export async function createPayment(db: D1Database, auth: AuthSession, key: string, input: CreatePaymentInput) {
+  const actor = auth.user.id;
   const id = crypto.randomUUID();
   const operation = `payment:create:${tokenHash(actor + ":" + key)}`;
   const fingerprint = tokenHash(JSON.stringify([input.customer_id, input.sale_id, input.amount_kurus, input.method]));
   const session = db.withSession("first-primary");
   const now = new Date().toISOString();
-  const results = await session.batch([
+  const results = await authorizedBatch(session, auth, [
     // The debt predicate is in the INSERT, inside the same write transaction as the audit.
     // Concurrent writers re-evaluate it after earlier committed payments; never pre-read then write.
     session.prepare(`INSERT INTO payments (id, customer_id, sale_id, amount_kurus, method, created_by, idempotency_key, created_at)
