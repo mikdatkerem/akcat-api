@@ -7,7 +7,7 @@ export const reasonBody = z.object({ reason: reasonSchema }).strict();
 export const correctionType = z.enum(["sale_cancel", "sale_customer", "sale_items", "sale_error", "payment_amount", "payment_method", "payment_reversal", "payment_refund"]);
 export const approvalBody = reasonBody.extend({ expected_amount_kurus: money.optional(), expected_sale_remaining_kurus: money.optional(),
   expected_customer_debt_kurus: money.optional(), refund_confirmation: z.object({ confirmed: z.literal(true), reference: z.string().trim().normalize("NFC").min(1).max(200) }).strict().optional() }).strict();
-export const financialPreviewSchema = z.object({ payment_id: z.string(), sale_id: z.string(), customer_id: z.string(), customer_name: z.string(),
+export const financialPreviewSchema = z.object({ sale_type: z.enum(["normal","walk_in"]), payment_id: z.string(), sale_id: z.string(), customer_id: z.string().nullable(), customer_name: z.string(),
   amount_kurus: money, method: z.enum(["cash", "card", "bank"]), original_created_at: z.string(), original_created_by_username: z.string(),
   before_sale_remaining_kurus: money, after_sale_remaining_kurus: money, before_customer_debt_kurus: money, after_customer_debt_kurus: money,
   requires_external_confirmation: z.boolean() });

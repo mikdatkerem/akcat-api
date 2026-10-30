@@ -78,3 +78,7 @@ Bu aşamadan önce çalışma alanında bulunan rapor değişiklikleri korunmuş
 | Belgeler | Kök `SKILLS.md`, `PROJE.md`, `MIMARI_TASARIM.md`, `PROMPTLAR.md`; API `README.md`, `docs/CORRECTIONS.md`, `FINANCIAL_ADJUSTMENTS.md`, `FINANCE.md`, `SALES.md`, `REPORTS.md`; web `README.md` |
 
 Doğrulanan: **137 API testi** (104 önceki + 17 rapor + 16 finansal düzeltme), **5 tutar testi**, **63 tarayıcı kontrolü** (57 mevcut + 6 finansal düzeltme). Eşzamanlı onay, aynı anahtar/yanıt kaybı, eksik iade teyidi, stale bakiye, audit hatasında rollback, borç/ledger/rapor/geçmiş testleri gerçek izole yerel D1 üzerinde geçti. Sağlık kontrolü/proxy korunmuştur. Test ortamları temizlendi. Web/API TypeScript ve build, web lint ve mevcut web ESLint’iyle API kaynak/test Worker lint’i başarılıdır; API build yalnızca dry-run’dır. Üretilmiş web tip dosyasındaki önceden bulunan iki lint uyarısı sürer. Gerçek veri, mevcut yerel/uzak D1, deploy, commit/push ve paket kurulumu yapılmadı.
+
+## Hızlı satış (30.10.2026)
+
+Müşterisiz `walk_in` satış, NULL müşteri ilişkileri ve aynı atomik işlemde tam ödeme/iptal istisnası [WALK_IN_SALES.md](WALK_IN_SALES.md) ile tanımlıdır. Normal satış kuralları korunur; hızlı satışın tam ters kaydı/iadesi ayrı açık borç bırakmadan aynı batch’te satışını iptal eder. Eski müşterisiz kaydı normal müşteri olarak varsaymayın; liste/raporlarda NULL ilişkiyi koruyun.

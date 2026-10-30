@@ -81,3 +81,7 @@ Satış modülünün ilk doğrulamasında 66 API testi, 5 fiyat/hesaplama testi 
 | Web | `src/sales/SalesPage.tsx`, `SaleForm.tsx`, `SaleListPage.tsx`, `SaleRecord.tsx`, `RecordPicker.tsx`, `draft.ts`, `math.ts`, `presentation.ts`, `routing.ts`, `sales.css`; `src/services/sales.ts` |
 | Web entegrasyon/test | `src/App.tsx`, `src/layout/navigation.ts`, `src/pages/OverviewPage.tsx`, `src/pages/modulePages.ts`, `src/services/apiClient.ts`; `tests/sales.browser.mjs`, `tests/sales-math.test.mjs`, `tests/run-auth.mjs`; `package.json`, `README.md` |
 | Kök | `PROJE.md`, `MIMARI_TASARIM.md` |
+
+## Hızlı satış (30.10.2026)
+
+Müşterisiz `walk_in` satış, NULL müşteri ilişkileri ve aynı atomik işlemde tam ödeme/iptal istisnası [WALK_IN_SALES.md](WALK_IN_SALES.md) ile tanımlıdır. Normal satış kuralları korunur; hızlı satışın tam ters kaydı/iadesi ayrı açık borç bırakmadan aynı batch’te satışını iptal eder. Eski müşterisiz kaydı normal müşteri olarak varsaymayın; liste/raporlarda NULL ilişkiyi koruyun.

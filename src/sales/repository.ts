@@ -7,16 +7,17 @@ import { validPayment } from "../finance/sql";
 import type { PublicUser } from "../types";
 
 const MAX = Number.MAX_SAFE_INTEGER;
-export const summarySelect = `SELECT s.id, s.customer_id, c.name AS customer_name, s.created_by, u.username AS created_by_username,
+export const summarySelect = `SELECT s.id, s.sale_type, s.walk_in_customer_name, s.customer_id, coalesce(c.name,s.walk_in_customer_name,'Misafir Müşteri') AS customer_name, s.created_by, u.username AS created_by_username,
   s.status, s.total_kurus, s.created_at, s.updated_at,
   coalesce((SELECT sum(p.amount_kurus) FROM payments p WHERE p.sale_id = s.id AND ${validPayment}), 0) AS paid_kurus
-  FROM sales s JOIN customers c ON c.id = s.customer_id JOIN users u ON u.id = s.created_by`;
-export type SummaryRow = { id: string; customer_id: string; customer_name: string; created_by: string; created_by_username: string;
+  FROM sales s LEFT JOIN customers c ON c.id = s.customer_id JOIN users u ON u.id = s.created_by`;
+export type SummaryRow = { id: string; sale_type: "normal" | "walk_in"; walk_in_customer_name: string | null; customer_id: string | null; customer_name: string; created_by: string; created_by_username: string;
   status: "completed" | "cancelled"; total_kurus: number; paid_kurus: number; created_at: string; updated_at: string };
 export function presentSale(row: SummaryRow) {
   if (![row.total_kurus, row.paid_kurus].every(value => Number.isSafeInteger(value) && value >= 0) || row.paid_kurus > row.total_kurus) {
     throw new Error("Invalid stored sale amounts");
   }
+  if (row.sale_type === "walk_in" && row.status === "completed" && row.paid_kurus !== row.total_kurus) throw new Error("Incomplete walk-in payment");
   return { ...row, remaining_kurus: row.status === "cancelled" ? 0 : row.total_kurus - row.paid_kurus,
     payment_status: row.paid_kurus === row.total_kurus ? "paid" as const : row.paid_kurus > 0 ? "partial" as const : "credit" as const };
 }
@@ -42,7 +43,7 @@ export async function getSale(db: D1Database, id: string, actor?: PublicUser) {
   const elapsed = Date.now() - Date.parse(row.created_at);
   const allowed = !!actor && row.status === "completed" && !hasPayments
     && (actor.role === "admin" || (actor.id === row.created_by && elapsed >= 0 && elapsed <= 300000));
-  return { ...presentSale(row), customer: results[1]?.results[0], items: results[2]?.results,
+  return { ...presentSale(row), customer: results[1]?.results[0] ?? null, items: results[2]?.results,
     cancellation_history: results[4]?.results.map(log => {
       const metadata = JSON.parse(String(log.metadata));
       return { actor_user_id: log.actor_user_id, username: log.username, created_at: log.created_at,
@@ -78,7 +79,7 @@ export async function createSale(db: D1Database, auth: AuthSession, key: string,
   const now = new Date().toISOString();
   const operation = `sale:create:${tokenHash(actor + ":" + key)}`;
   const items = [...input.items].sort((a, b) => a.product_id.localeCompare(b.product_id));
-  const fingerprint = tokenHash(JSON.stringify([input.customer_id, items, input.payment]));
+  const fingerprint = tokenHash(JSON.stringify(input.sale_type === "normal" ? [input.customer_id, items, input.payment] : [null, items, input.payment, "walk_in", input.walk_in_customer_name]));
   const requested = JSON.stringify(items.map(item => ({ ...item, id: crypto.randomUUID() })));
   const session = db.withSession("first-primary");
   // Pricing, active checks and every write execute inside ONE SQLite transaction. No pre-read price window.
@@ -96,12 +97,13 @@ export async function createSale(db: D1Database, auth: AuthSession, key: string,
         AND coalesce(r.unit_price_kurus, p.current_price_kurus) <= ${MAX} / r.quantity
         THEN coalesce(r.unit_price_kurus, p.current_price_kurus) * r.quantity ELSE NULL END AS line_total
       FROM requested r LEFT JOIN products p ON p.id = r.product_id
-    ) INSERT INTO sales (id, customer_id, created_by, status, total_kurus, idempotency_key, created_at, updated_at)
-    SELECT ?, ?, ?, 'completed', sum(line_total), ?, ?, ? FROM priced
+    ) INSERT INTO sales (id, customer_id, created_by, status, total_kurus, idempotency_key, created_at, updated_at, sale_type, walk_in_customer_name)
+    SELECT ?, ?, ?, 'completed', sum(line_total), ?, ?, ?, ?, ? FROM priced
     HAVING count(line_total) = ? AND sum(line_total) <= ${MAX} AND ? <= sum(line_total)
-      AND EXISTS (SELECT 1 FROM customers WHERE id = ? AND is_active = 1)
+      AND ((?='normal' AND EXISTS (SELECT 1 FROM customers WHERE id = ? AND is_active = 1))
+        OR (?='walk_in' AND ?=sum(line_total) AND sum(line_total)>0))
       AND NOT EXISTS (SELECT 1 FROM sales WHERE idempotency_key = ?)`)
-      .bind(requested, id, input.customer_id, actor, operation, now, now, items.length, input.payment.amount_kurus, input.customer_id, operation),
+      .bind(requested, id, input.customer_id, actor, operation, now, now, input.sale_type, input.walk_in_customer_name, items.length, input.payment.amount_kurus, input.sale_type, input.customer_id, input.sale_type, input.payment.amount_kurus, operation),
     session.prepare(`INSERT INTO sale_items (id, sale_id, product_id, product_name_snapshot, list_unit_price_kurus, unit_price_kurus, quantity, line_total_kurus)
       SELECT json_extract(j.value, '$.id'), s.id, p.id, p.name, p.current_price_kurus,
         coalesce(json_extract(j.value, '$.unit_price_kurus'), p.current_price_kurus),
@@ -114,7 +116,7 @@ export async function createSale(db: D1Database, auth: AuthSession, key: string,
       .bind(crypto.randomUUID(), input.payment.amount_kurus, input.payment.method, now, id, input.payment.amount_kurus),
     session.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata, created_at)
       SELECT ?, created_by, 'sale.created', 'sale', id, ?, ? FROM sales WHERE id = ?`)
-      .bind(operation, JSON.stringify({ fields: ["customer_id", "items", "payment"], request_hash: fingerprint }), now, id),
+      .bind(operation, JSON.stringify({ fields: input.sale_type === "walk_in" ? ["sale_type", "walk_in_customer_name", "items", "payment"] : ["customer_id", "items", "payment"], request_hash: fingerprint }), now, id),
     session.prepare("SELECT entity_id, metadata FROM audit_logs WHERE id = ? AND actor_user_id = ?").bind(operation, actor),
     session.prepare(`SELECT p.id AS product_id, p.name, json_extract(j.value, '$.expected_list_price_kurus') AS expected_list_price_kurus, p.current_price_kurus
       FROM json_each(?) j JOIN products p ON p.id=json_extract(j.value, '$.product_id')

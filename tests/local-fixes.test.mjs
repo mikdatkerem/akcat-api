@@ -8,7 +8,7 @@ import { reportEnvironment } from './report-environment.mjs'
 let env, admin, employee, customer, emptyCustomer, sale, original
 const key = randomUUID()
 const saved = async response => { assert.equal(response.status, 201); return (await response.json()).data }
-const rows = async () => Object.fromEntries(await Promise.all(['sales', 'sale_items', 'payments', 'audit_logs'].map(async table => [table, await env.sql(`SELECT * FROM ${table} ORDER BY id`)])))
+const rows = async () => Object.fromEntries(await Promise.all(['sales', 'sale_items', 'payments', 'audit_logs'].map(async table => [table, await env.sql(`SELECT ${table === 'sales' ? 'id,customer_id,created_by,status,total_kurus,idempotency_key,created_at,updated_at' : '*'} FROM ${table} ORDER BY id`)])))
 const body = () => ({ customer_id: customer.id, sale_id: sale.id, amount_kurus: 25000, method: 'cash' })
 before(async () => {
   env = await reportEnvironment({ migrations: ['0001_initial_schema.sql'] })

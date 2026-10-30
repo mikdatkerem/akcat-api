@@ -12,8 +12,8 @@ const optional = <S extends z.ZodType>(schema: S) => z.preprocess(value => value
 export const adjustmentQuery = pagination.extend({ customer_id: optional(z.uuid()), sale_id: optional(z.uuid()), created_by: optional(z.uuid()),
   kind: optional(z.enum(["record_reversal", "external_refund"])), from: optional(z.iso.datetime()), to: optional(z.iso.datetime()) })
   .refine(value => !value.from || !value.to || Date.parse(value.from) < Date.parse(value.to));
-export const adjustmentSchema = z.object({ id: z.string(), correction_request_id: z.string(), payment_id: z.string(), reversal_payment_id: z.string(),
-  sale_id: z.string(), customer_id: z.string(), customer_name: z.string(), kind: z.enum(["record_reversal", "external_refund"]), amount_kurus: money,
+export const adjustmentSchema = z.object({ sale_type: z.enum(["normal","walk_in"]), id: z.string(), correction_request_id: z.string(), payment_id: z.string(), reversal_payment_id: z.string(),
+  sale_id: z.string(), customer_id: z.string().nullable(), customer_name: z.string(), kind: z.enum(["record_reversal", "external_refund"]), amount_kurus: money,
   method: z.enum(["cash", "card", "bank"]), reason: z.string(), requested_by: z.string(), requested_by_username: z.string(),
   performed_by: z.string(), performed_by_username: z.string(), approved_by: z.string(), approved_by_username: z.string(),
   before_sale_remaining_kurus: money, after_sale_remaining_kurus: money, before_customer_debt_kurus: money, after_customer_debt_kurus: money,

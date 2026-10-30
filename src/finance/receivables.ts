@@ -44,11 +44,15 @@ export function debtorsQuery(q: string, includeTotals = false) {
 }
 export async function listReceivables(db: D1Database, query: DebtQuery) {
   const { cte, params } = debtorsQuery(query.q);
+  const terms: string[] = [], bounds: number[] = [];
+  if (query.min_debt_kurus !== undefined) { terms.push("total_debt_kurus >= ?"); bounds.push(query.min_debt_kurus); }
+  if (query.max_debt_kurus !== undefined) { terms.push("total_debt_kurus <= ?"); bounds.push(query.max_debt_kurus); }
+  const where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
   const session = db.withSession("first-primary");
   const results = await session.batch([
-    session.prepare(`${cte} SELECT count(*) AS total FROM debtors`).bind(...params),
-    session.prepare(`${cte} SELECT * FROM debtors ORDER BY total_debt_kurus DESC, id LIMIT ? OFFSET ?`)
-      .bind(...params, query.pageSize, (query.page - 1) * query.pageSize),
+    session.prepare(`${cte} SELECT count(*) AS total FROM debtors ${where}`).bind(...params, ...bounds),
+    session.prepare(`${cte} SELECT * FROM debtors ${where} ORDER BY total_debt_kurus DESC, id LIMIT ? OFFSET ?`)
+      .bind(...params, ...bounds, query.pageSize, (query.page - 1) * query.pageSize),
   ]);
   return { data: (results[1]?.results as Record<string, unknown>[]).map(summaryRow),
     pagination: pageInfo(query, (results[0]?.results[0] as { total: number }).total) };

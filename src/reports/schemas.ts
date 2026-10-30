@@ -22,7 +22,7 @@ export const salesTotalsSchema = z.object({ sales_total_kurus: money, sales_coun
 export const paymentTotalsSchema = z.object({ payments_total_kurus: money, payments_count: money, cash_kurus: money, card_kurus: money, bank_kurus: money });
 export const debtTotalsSchema = z.object({ total_debt_kurus: money, debtor_count: money, open_sales_count: money, sales_total_kurus: money, paid_kurus: money });
 export const recentSchema = z.object({ id: z.string(), type: z.enum(["sale", "payment", "cancellation", "record_reversal", "external_refund"]), sale_id: z.string().nullable(),
-  customer_id: z.string(), customer_name: z.string(), amount_kurus: money, created_by: z.string(), created_by_username: z.string(), created_at: z.string(), status: z.string() });
+  customer_id: z.string().nullable(), customer_name: z.string(), amount_kurus: money, created_by: z.string(), created_by_username: z.string(), created_at: z.string(), status: z.string() });
 export const summaryReportSchema = z.object({ range: rangeSchema, sales: salesTotalsSchema, payments: paymentTotalsSchema, adjustments: adjustmentTotalsSchema, receivables: debtTotalsSchema, recent: z.array(recentSchema) });
 export const itemSchema = z.object({ id: z.string(), sale_id: z.string(), product_id: z.string(), product_name_snapshot: z.string(), unit_price_kurus: money,
   quantity: money, line_total_kurus: money, created_at: z.string(), created_by_username: z.string(), customer_name: z.string() });

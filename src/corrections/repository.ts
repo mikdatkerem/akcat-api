@@ -64,7 +64,7 @@ function present(row: Record<string, unknown>, history: unknown[] = [], financia
   return { ...rest, status: String(row.status), correction_type: typeof change.correction_type === "string" ? change.correction_type : "legacy",
     requested_change: typeof change.requested_change === "string" ? change.requested_change : String(row.proposed_change ?? ""),
     can_approve: row.status === "pending" && supported === 1,
-    approval_explanation: row.status !== "pending" ? "Talep sonuçlandırıldı." : supported === 1 ? (row.target_type === "payment" ? "Tam tutar ters çevrilir; aktif satışın ve müşterinin borcu aynı tutarda artar. Harici iade, yalnızca adminin fiilen gerçekleştiğine dair teyidiyle kaydedilir." : "Tüm ödemeleri finansal olarak kapatılmış satış iptal edilir; satış borcu kapanır.")
+    approval_explanation: row.status !== "pending" ? "Talep sonuçlandırıldı." : (financial_preview as { sale_type?: string } | null)?.sale_type === "walk_in" ? "Tam finansal düzeltme hızlı satışı aynı işlemde iptal eder; müşteri borcu oluşmaz. Harici iade için fiilen ödeme teyidi gerekir." : supported === 1 ? (row.target_type === "payment" ? "Tam tutar ters çevrilir; aktif satışın ve müşterinin borcu aynı tutarda artar. Harici iade, yalnızca adminin fiilen gerçekleştiğine dair teyidiyle kaydedilir." : "Tüm ödemeleri finansal olarak kapatılmış satış iptal edilir; satış borcu kapanır.")
       : "Bu talep onaylanamaz. Önce ödemeleri teyitli iade veya hatalı kayıt ters kaydıyla kapatın. Eski türü belirsiz ters kayıt, kısmi düzeltme ve doğrudan tutar/yöntem değişikliği desteklenmez.", financial_preview, adjustment, cancellation_preview, history };
 }
 export async function getCorrection(db: D1Database, actor: PublicUser, id: string) {

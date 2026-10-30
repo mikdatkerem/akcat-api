@@ -9,7 +9,7 @@ let env, admin, employee, customer, product, legacy, snapshot
 const saved = async response => { assert.equal(response.status, 201); return (await response.json()).data }
 const read = async path => { const response = await env.read(admin, '/api/v1/' + path); assert.equal(response.status, 200); return response.json() }
 const originalRows = async () => Object.fromEntries(await Promise.all(['sales', 'sale_items', 'payments', 'audit_logs'].map(async table =>
-  [table, await env.sql(`SELECT * FROM ${table} ORDER BY id`)])))
+  [table, await env.sql(`SELECT ${table === 'sales' ? 'id,customer_id,created_by,status,total_kurus,idempotency_key,created_at,updated_at' : '*'} FROM ${table} ORDER BY id`)])))
 const request = async (type, id) => saved(await env.write(employee, '/api/v1/correction-requests', {
   target_type: type === 'sale_cancel' ? 'sale' : 'payment', target_id: id, correction_type: type, reason: 'İzole denetim gerekçesi', requested_change: 'Denetim akışı',
 }))

@@ -5,13 +5,13 @@ import { tokenHash } from "../security/tokens";
 import { balancesCte, safeMoney, validPayment } from "./sql";
 import type { CreatePaymentInput, PaymentQuery, PageQuery } from "./schemas";
 
-export const paymentSelect = `SELECT p.id, p.customer_id, c.name AS customer_name, p.sale_id, p.amount_kurus, p.method,
+export const paymentSelect = `SELECT p.id, p.customer_id, coalesce(c.name,s.walk_in_customer_name,'Misafir Müşteri') AS customer_name, p.sale_id, p.amount_kurus, p.method,
   p.created_by, u.username AS created_by_username, p.created_at, p.reversal_of_payment_id,
   f.kind AS adjustment_kind, f.id AS adjustment_id,
   CASE WHEN ${validPayment} THEN 1 ELSE 0 END AS is_valid,
   CASE WHEN p.idempotency_key = 'initial:' || s.idempotency_key THEN 1 ELSE 0 END AS is_initial,
-  CASE WHEN s.status = 'completed' THEN b.remaining_kurus WHEN s.id IS NOT NULL THEN 0 ELSE NULL END AS sale_remaining_kurus
-  FROM payments p JOIN customers c ON c.id = p.customer_id JOIN users u ON u.id = p.created_by
+  CASE WHEN s.status = 'completed' AND s.sale_type='normal' THEN b.remaining_kurus WHEN s.id IS NOT NULL THEN 0 ELSE NULL END AS sale_remaining_kurus
+  FROM payments p LEFT JOIN customers c ON c.id = p.customer_id JOIN users u ON u.id = p.created_by
   LEFT JOIN sales s ON s.id = p.sale_id LEFT JOIN balances b ON b.id = s.id
   LEFT JOIN financial_adjustments f ON f.payment_id = coalesce(p.reversal_of_payment_id, p.id)`;
 export function presentPayment(row: Record<string, unknown>) {
@@ -55,10 +55,17 @@ export async function listPayments(db: D1Database, query: PaymentQuery) {
   if (query.status === "valid") terms.push(validPayment);
   if (query.from) { terms.push("p.created_at >= ?"); params.push(new Date(query.from).toISOString()); }
   if (query.to) { terms.push("p.created_at < ?"); params.push(new Date(query.to).toISOString()); }
+  if (query.min_amount_kurus !== undefined) { terms.push("p.amount_kurus >= ?"); params.push(query.min_amount_kurus); }
+  if (query.max_amount_kurus !== undefined) { terms.push("p.amount_kurus <= ?"); params.push(query.max_amount_kurus); }
+  if (query.q) {
+    let name = "coalesce(c.name, s.walk_in_customer_name, 'Misafir Müşteri')";
+    for (const [upper, lower] of [["İ", "i"], ["I", "ı"], ["Ğ", "ğ"], ["Ü", "ü"], ["Ş", "ş"], ["Ö", "ö"], ["Ç", "ç"], ["Â", "â"], ["Î", "î"], ["Û", "û"]]) name = `replace(${name}, '${upper}', '${lower}')`;
+    terms.push(`instr(lower(${name}), ?) > 0`); params.push(query.q.toLocaleLowerCase("tr-TR"));
+  }
   const where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
   const session = db.withSession("first-primary");
   const results = await session.batch([
-    session.prepare(`SELECT count(*) AS total FROM payments p ${where}`).bind(...params),
+    session.prepare(`SELECT count(*) AS total FROM payments p ${query.q ? "LEFT JOIN customers c ON c.id = p.customer_id LEFT JOIN sales s ON s.id = p.sale_id" : ""} ${where}`).bind(...params),
     session.prepare(`${balancesCte} ${paymentSelect} ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?`)
       .bind(...params, query.pageSize, (query.page - 1) * query.pageSize),
   ]);

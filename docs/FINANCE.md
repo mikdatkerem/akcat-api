@@ -7,10 +7,10 @@ AKÇAT tek işletmedir. `admin` ve `employee` bütün şirket satışlarını, t
 | Metot / yol | İstek | Yanıt |
 |---|---|---|
 | `POST /api/v1/payments` | JSON + UUID `Idempotency-Key` | İlkinde `201 {data:Payment}`, tekrarda `200` |
-| `GET /api/v1/payments` | `customer_id`, `sale_id`, `method`, `from`, `to`, `status=all/valid`, `page`, `pageSize` | `{data:Payment[],pagination}` |
+| `GET /api/v1/payments` | `q`, `customer_id`, `sale_id`, `method`, `from`, `to`, `status=all/valid`, `min_amount_kurus`, `max_amount_kurus`, `page`, `pageSize` | `{data:Payment[],pagination}` |
 | `GET /api/v1/customers/:id/receivables` | UUID müşteri; `page`, `pageSize` | `{customer,summary,data:SaleSummary[],pagination}` |
 | `GET /api/v1/customers/:id/ledger` | UUID müşteri; `type=all/sale/payment/reversal/record_reversal/external_refund/cancellation`, `from`, `to`, `page`, `pageSize` | `{customer,summary,data:LedgerEntry[],pagination}` |
-| `GET /api/v1/receivables` | `q`, `page`, `pageSize` | `{data:Debtor[],pagination}` |
+| `GET /api/v1/receivables` | `q`, `min_debt_kurus`, `max_debt_kurus`, `page`, `pageSize` | `{data:Debtor[],pagination}` |
 
 Son endpoint, Veresiye ekranının borçlu müşteri arama/sayfalama ihtiyacı içindir. Bütün endpoint’ler oturum ve admin/employee rolü ister. `POST` cookie istemcisinde ayrıca izinli Origin ve oturuma bağlı `X-CSRF-Token`, JSON ve en fazla 16 KiB gövde ister. Geniş CORS izni eklenmedi; yanıtlar `no-store` taşır.
 
@@ -19,6 +19,14 @@ POST yalnızca `customer_id`, `sale_id`, `amount_kurus`, `method` kabul eder; bi
 400 biçim/filtre, 401 oturum, 403 yetki/origin/CSRF, 404 müşteri yok, 409 aynı anahtar farklı iş içeriği, 413 boyut, 415 JSON, 422 satış-müşteri/durum/kalan borç uyuşmazlığı, 500 beklenmeyen hata anlamına gelir. SQL, stack veya gizli kimlik bilgisi döndürülmez.
 
 ## Finansal model
+
+### Liste tutar filtreleri
+
+Tutar sınırları API’de 0–9007199254740991 arası tam sayı **kuruş** olarak alınır; boş/eksik sınır uygulanmaz. Negatif, kesirli, geçersiz, güvenli sınırı aşan veya minimumu maksimumdan büyük aralık `400 INVALID_FINANCE_INPUT` döndürür. Alt/üst sınırlar dahildir; diğer filtrelerle birlikte, sayım ve sayfalama öncesinde parametreli SQL ile uygulanır. UI binlik ayırıcısız TL metnini mevcut BigInt yardımcılarıyla kayıpsız çevirir (`19,99` → `1999`, `1000` → `100000`).
+
+Tahsilatta aralık her `payments` satırının **kendi kayıt tutarına** uygulanır. `q`, gerçek müşteri veya hızlı satıştaki isteğe bağlı isimde arar; isimsiz hızlı satış “Misafir Müşteri” olarak aranabilir. Ters kayıt/iade ve bunlarla kapatılan asıl tahsilatlar `status=all` içinde mevcut `adjustment_kind`, `is_valid`, `reversal_of_payment_id` alanlarıyla ayrı kalır; sıradan geçerli tahsilat sayılmaz. `status=valid` yalnızca mevcut geçerli ödeme kuralını kullanır. Filtrelenmiş liste tutarlarından nakit/net tahsilat toplamı türetilmez.
+
+Veresiye aralığı, müşteri başına açık satışların **güncel kalan borcu toplandıktan sonra** uygulanır; geçmiş satış toplamını filtrelemez. Geçerli tahsilat, iptal ve düzeltme etkileri aynı `balancesCte` ile hesaplanır. Müşterisiz hızlı satışlar borçlu listesine girmez. Sıralama `total_debt_kurus DESC, id` olarak korunur. Yeni borç sütunu veya migration yoktur.
 
 Yerel kurulumda `0001` ve `0002` birlikte gereklidir. `financial_adjustments` yoksa boş geçmiş de sorgu hatasıdır: `503 DATABASE_SCHEMA_REQUIRED`, `data: []` değildir. Tahsilatın yanıt SELECT'i aynı D1 batch'inde olduğundan bu eksiklikte ödeme/audit geri alınır; aynı işlem anahtarı şema düzeltildikten sonra güvenle tekrar kullanılabilir. Doğrulanmış 400/403/413/415/422 retleri arayüzde “Tahsilat kaydedilmedi”; ağ/500/yanıt doğrulama hatası ise belirsiz sonuç olarak gösterilir ve anahtar/gövde korunur. Boş geçmiş tek başına bir yazmanın sonucunu kanıtlamaz. Yerel düzeltme ayrıntıları: [LOCAL_FIXES.md](LOCAL_FIXES.md).
 
@@ -68,3 +76,7 @@ Tahsilat aşamasında doğrulanan sonuçlar: önceki 66 test + 17 finans testi =
 | Web entegrasyon/test | `src/App.tsx`, `src/layout/navigation.ts`, `src/customers/CustomerRecordPage.tsx`, `src/sales/SaleListPage.tsx`, `src/sales/SaleRecord.tsx`, `src/services/sales.ts`, `src/services/apiClient.ts`; `tests/finance.browser.mjs`, `tests/run-auth.mjs`; `package.json` |
 | Temizlenen iskelet | Artık kullanılmayan `src/pages/ModulePage.tsx` ve `modulePages.ts` |
 | Dokümanlar | Kök `SKILLS.md`, `PROJE.md`, `MIMARI_TASARIM.md`, `PROMPTLAR.md`; API `README.md`, `docs/FINANCE.md`, `docs/SALES.md`, `docs/CUSTOMERS.md`; web `README.md` |
+
+## Hızlı satış (30.10.2026)
+
+Müşterisiz `walk_in` satış, NULL müşteri ilişkileri ve aynı atomik işlemde tam ödeme/iptal istisnası [WALK_IN_SALES.md](WALK_IN_SALES.md) ile tanımlıdır. Normal satış kuralları korunur; hızlı satışın tam ters kaydı/iadesi ayrı açık borç bırakmadan aynı batch’te satışını iptal eder. Eski müşterisiz kaydı normal müşteri olarak varsaymayın; liste/raporlarda NULL ilişkiyi koruyun.

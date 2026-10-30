@@ -40,19 +40,19 @@ export async function reportSummary(db: D1Database, query: ReportQuery) {
   const results = await session.batch<Row>([
     saleTotals(session, range), paymentTotals(session, range), session.prepare(`${debt.cte} ${debtSummary}`),
     session.prepare(`SELECT * FROM (
-      SELECT 'sale:'||s.id AS id, 'sale' AS type, s.id AS sale_id, s.customer_id, c.name AS customer_name,
+      SELECT 'sale:'||s.id AS id, 'sale' AS type, s.id AS sale_id, s.customer_id, coalesce(c.name,s.walk_in_customer_name,'Misafir Müşteri') AS customer_name,
         s.total_kurus AS amount_kurus, s.created_by, u.username AS created_by_username, s.created_at, s.status
-      FROM sales s JOIN customers c ON c.id=s.customer_id JOIN users u ON u.id=s.created_by WHERE s.created_at>=? AND s.created_at<?
+      FROM sales s LEFT JOIN customers c ON c.id=s.customer_id JOIN users u ON u.id=s.created_by WHERE s.created_at>=? AND s.created_at<?
       UNION ALL
-      SELECT 'payment:'||p.id, 'payment', p.sale_id, p.customer_id, c.name, p.amount_kurus, p.created_by, u.username, p.created_at, 'valid'
-      FROM payments p JOIN customers c ON c.id=p.customer_id JOIN users u ON u.id=p.created_by WHERE p.created_at>=? AND p.created_at<? AND ${validPayment}
+      SELECT 'payment:'||p.id, 'payment', p.sale_id, p.customer_id, coalesce(c.name,(SELECT walk_in_customer_name FROM sales WHERE id=p.sale_id),'Misafir Müşteri'), p.amount_kurus, p.created_by, u.username, p.created_at, 'valid'
+      FROM payments p LEFT JOIN customers c ON c.id=p.customer_id JOIN users u ON u.id=p.created_by WHERE p.created_at>=? AND p.created_at<? AND ${validPayment}
       UNION ALL
-      SELECT 'cancellation:'||a.id, 'cancellation', s.id, s.customer_id, c.name, s.total_kurus, a.actor_user_id, u.username, a.created_at, 'cancelled'
-      FROM audit_logs a JOIN sales s ON s.id=a.entity_id JOIN customers c ON c.id=s.customer_id JOIN users u ON u.id=a.actor_user_id
+      SELECT 'cancellation:'||a.id, 'cancellation', s.id, s.customer_id, coalesce(c.name,s.walk_in_customer_name,'Misafir Müşteri'), s.total_kurus, a.actor_user_id, u.username, a.created_at, 'cancelled'
+      FROM audit_logs a JOIN sales s ON s.id=a.entity_id LEFT JOIN customers c ON c.id=s.customer_id JOIN users u ON u.id=a.actor_user_id
       WHERE a.created_at>=? AND a.created_at<? AND a.action='sale.cancelled' AND a.entity_type='sale'
       UNION ALL
-      SELECT 'adjustment:'||f.id, f.kind, f.sale_id, f.customer_id, c.name, f.amount_kurus, f.performed_by, u.username, f.created_at, 'approved'
-      FROM financial_adjustments f JOIN customers c ON c.id=f.customer_id JOIN users u ON u.id=f.performed_by WHERE f.created_at>=? AND f.created_at<?
+      SELECT 'adjustment:'||f.id, f.kind, f.sale_id, f.customer_id, coalesce(c.name,(SELECT walk_in_customer_name FROM sales WHERE id=f.sale_id),'Misafir Müşteri'), f.amount_kurus, f.performed_by, u.username, f.created_at, 'approved'
+      FROM financial_adjustments f LEFT JOIN customers c ON c.id=f.customer_id JOIN users u ON u.id=f.performed_by WHERE f.created_at>=? AND f.created_at<?
     ) ORDER BY created_at DESC, id DESC LIMIT 10`).bind(range.from, range.to, range.from, range.to, range.from, range.to, range.from, range.to),
     adjustmentTotals(session, range.from, range.to),
   ]);
@@ -62,7 +62,7 @@ export async function reportSummary(db: D1Database, query: ReportQuery) {
 export async function reportSales(db: D1Database, query: ReportQuery) {
   const range = reportRange(query), session = db.withSession("first-primary"), time = timeFilter("s", range, query.created_by);
   const productView = query.view === "products", itemView = query.view === "items";
-  const match = search(query.q, productView ? "i.product_name_snapshot" : "c.name");
+  const match = search(query.q, productView ? "i.product_name_snapshot" : "coalesce(c.name,s.walk_in_customer_name,'Misafir Müşteri')");
   const status = query.view === "cancelled" ? "cancelled" : "completed";
   const params = [...time.params, status, ...match.params];
   const where = `WHERE ${time.sql} AND s.status=?${match.sql}`;
@@ -73,12 +73,12 @@ export async function reportSales(db: D1Database, query: ReportQuery) {
     count = `SELECT count(*) AS total FROM (${grouped})`;
     list = `SELECT * FROM (${grouped}) ORDER BY total_kurus DESC, product_id, product_name_snapshot, unit_price_kurus`;
   } else if (itemView) {
-    const from = `FROM sale_items i JOIN sales s ON s.id=i.sale_id JOIN customers c ON c.id=s.customer_id JOIN users u ON u.id=s.created_by ${where}`;
+    const from = `FROM sale_items i JOIN sales s ON s.id=i.sale_id LEFT JOIN customers c ON c.id=s.customer_id JOIN users u ON u.id=s.created_by ${where}`;
     count = `SELECT count(*) AS total ${from}`;
     list = `SELECT i.id,i.sale_id,i.product_id,i.product_name_snapshot,i.unit_price_kurus,i.quantity,i.line_total_kurus,
-      s.created_at,u.username AS created_by_username,c.name AS customer_name ${from} ORDER BY s.created_at DESC,s.id DESC,i.id`;
+      s.created_at,u.username AS created_by_username,coalesce(c.name,s.walk_in_customer_name,'Misafir Müşteri') AS customer_name ${from} ORDER BY s.created_at DESC,s.id DESC,i.id`;
   } else {
-    count = `SELECT count(*) AS total FROM sales s JOIN customers c ON c.id=s.customer_id ${where}`;
+    count = `SELECT count(*) AS total FROM sales s LEFT JOIN customers c ON c.id=s.customer_id ${where}`;
     list = `${summarySelect} ${where} ORDER BY s.created_at DESC,s.id DESC`;
   }
   const results = await session.batch<Row>([saleTotals(session, range, query.created_by), session.prepare(count).bind(...params),
@@ -88,10 +88,10 @@ export async function reportSales(db: D1Database, query: ReportQuery) {
     pagination: pageInfo(query, safeMoney(results[1]!.results[0]!.total)) };
 }
 export async function reportPayments(db: D1Database, query: ReportQuery) {
-  const range = reportRange(query), session = db.withSession("first-primary"), time = timeFilter("p", range, query.created_by), match = search(query.q, "c.name");
+  const range = reportRange(query), session = db.withSession("first-primary"), time = timeFilter("p", range, query.created_by), match = search(query.q, "coalesce(c.name,(SELECT walk_in_customer_name FROM sales WHERE id=p.sale_id),'Misafir Müşteri')");
   const where = `WHERE ${time.sql} AND ${validPayment}${match.sql}`, params = [...time.params, ...match.params];
   const results = await session.batch<Row>([paymentTotals(session, range, query.created_by),
-    session.prepare(`SELECT count(*) AS total FROM payments p JOIN customers c ON c.id=p.customer_id ${where}`).bind(...params),
+    session.prepare(`SELECT count(*) AS total FROM payments p LEFT JOIN customers c ON c.id=p.customer_id ${where}`).bind(...params),
     session.prepare(`${balancesCte} ${paymentSelect} ${where} ORDER BY p.created_at DESC,p.id DESC LIMIT ? OFFSET ?`)
       .bind(...params, query.pageSize, (query.page - 1) * query.pageSize),
     adjustmentTotals(session, range.from, range.to, query.created_by)]);
